@@ -1,0 +1,12 @@
+{
+  "name": "Obvious Scam - Google Impersonation",
+  "evidence": "From: recruiter@abc-solutions.com\nSubject: Exciting opportunity at Google!\n\nDear Applicant,\nCongratulations! We are hiring for Google. Please complete our training program for $50 upfront fee.\nLink: http://abc-solutions.com/apply\nBest regards,\nGoogle HR Team",
+  "expected_risk_level": "Likely Scam",
+  "expected_score_range": [85, 100],
+  "key_red_flags": [
+    "Upfront payment request",
+    "Email domain mismatch (abc-solutions.com vs google.com)",
+    "Recruiter domain recently registered",
+    "URL points to different domain"
+  ]
+}

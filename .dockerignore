@@ -1,0 +1,16 @@
+node_modules
+**/node_modules
+dist
+public
+.git
+.env
+.env.*
+*.log
+coverage
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+tests
+docs
+*.md

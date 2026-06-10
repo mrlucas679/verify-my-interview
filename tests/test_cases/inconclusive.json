@@ -1,0 +1,13 @@
+{
+  "name": "Inconclusive - Insufficient Evidence",
+  "evidence": "I got a job offer but I'm not sure if it's real",
+  "expected_risk_level": "Inconclusive",
+  "expected_score_range": [0, 20],
+  "missing_evidence": [
+    "No company name provided",
+    "No recruiter email or contact information",
+    "No job posting or description",
+    "No URL or communication details"
+  ],
+  "recommended_action": "Request more specific information (recruiter email, job posting, communication sample)"
+}

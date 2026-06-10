@@ -1,0 +1,15 @@
+{
+  "name": "Suspicious - Mixed Signals",
+  "evidence": "From: john.smith@techcompany-solutions.net\nSubject: Amazon Remote Position\n\nHello,\nWe have an immediate opening for a Data Analyst at Amazon. The position offers $120k/year. To proceed, please provide your SSN and banking details for direct deposit setup.\n\nLink: https://techcompany-solutions.net/amazon-careers\n\nBest regards,\nJohn Smith",
+  "expected_risk_level": "Suspicious",
+  "expected_score_range": [50, 75],
+  "key_red_flags": [
+    "Request for SSN and banking details before hire",
+    "Domain does not match Amazon official domain",
+    "Urgency language ('immediate opening')"
+  ],
+  "missing_verification": [
+    "Domain registration age not checked",
+    "Company registry lookup pending"
+  ]
+}
