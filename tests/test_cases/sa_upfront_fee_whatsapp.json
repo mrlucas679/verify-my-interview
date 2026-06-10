@@ -1,0 +1,9 @@
+{
+  "name": "SA upfront-fee + WhatsApp-only retail scam (synthetic)",
+  "evidence": "Vacancies at Bramley Superstores. We are hiring Cleaners, Packers and Cashiers. No interview, no experience needed.\n\nContact us on WhatsApp: 060 000 0000\nClosing date: 20 June 2026\n\nMEDICAL AND INDUCTION FEE: R300 (payable before your start date).",
+  "expected_risk_levels": ["Suspicious", "Likely Scam"],
+  "expected_score_range": [40, 100],
+  "required_signals": ["upfront_payment_request", "whatsapp_only_application"],
+  "expect_network_match": false,
+  "notes": "Synthetic clone of the observed retail-flyer pattern. The R300 'medical and induction fee' is the rand-denominated twin of the gift-card scam; legitimate employers never charge applicants. Identifiers are fabricated."
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Legitimate SA youth learnership (control, synthetic)",
+  "evidence": "Bonani Manufacturing is offering a 12-month YES learnership for unemployed South African youth aged 18 to 28.\n\nStipend: R5 000 per month.\nRequirements: Matric (Grade 12) and a valid South African ID.\n\nApply on our careers page at https://careers.bonani.co.za. No fees are charged to apply, and we will never ask you to pay to be considered.\n\nClosing date: 5 July 2026.",
+  "expected_risk_levels": ["Low Risk", "Needs More Verification", "Inconclusive"],
+  "expected_score_range": [0, 30],
+  "forbidden_signals": ["upfront_payment_request", "credential_request", "unofficial_application_channel", "whatsapp_only_application"],
+  "expect_network_match": false,
+  "notes": "Synthetic. A normal, legitimate YES learnership: own careers domain, market-related stipend, explicit no-fee statement. Tests that ordinary SA job posts are not over-flagged. The R5 000 stipend must not trigger the fee detector. Identifiers are fabricated."
+}

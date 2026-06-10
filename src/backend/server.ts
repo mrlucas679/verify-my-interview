@@ -14,6 +14,7 @@ import { getFoundrySettings, FoundryRunner } from './agent/foundryRunner';
 import { ToolOrchestrator } from './tools';
 import { ConversationalAgent } from './agent/agents/conversationalAgent';
 import { webResearchEnabled } from './research/webResearch';
+import { redactAndCap } from './privacy/redaction';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -120,7 +121,10 @@ app.post('/report', async (req: Request, res: Response) => {
       companyName: String(b.companyName).slice(0, 120),
       aliases: Array.isArray(b.aliases) ? b.aliases : [],
       scamType: b.scamType || 'User-reported scam',
-      description: String(b.description).slice(0, 5000),
+      // POPIA minimality: strip the reporter's/bystanders' sensitive identifiers
+      // (SA ID, bank, card numbers) before this free text is indexed or graphed.
+      // Scam IOCs (domains/emails/phones) are captured in their own fields below.
+      description: redactAndCap(String(b.description), 5000),
       domains: Array.isArray(b.domains) ? b.domains : [],
       emails: Array.isArray(b.emails) ? b.emails : [],
       phones: Array.isArray(b.phones) ? b.phones : [],

@@ -13,6 +13,58 @@ import { EmailHeaderAnalysis } from '../../utils/emailHeaders';
 /** Tools whose success counts toward verification coverage. */
 export const CORE_TOOLS = ['lookup_company_registry', 'lookup_domain_rdap', 'detect_scam_patterns'];
 
+/** Job-board aggregators that masquerade as the employer's application portal.
+ *  Real employers recruit on their own ATS/careers domain, not these. Seeded
+ *  from observed scam-ring infrastructure; extend as the network grows. */
+const KNOWN_AGGREGATORS = new Set([
+  'skillsdaily.co.za',
+  'simply-jobs.co.za',
+  'youthapplications.co.za',
+  'careerjob.co.za',
+  'careerjobza.co.za',
+]);
+
+/** Free website/blog hosts — never a legitimate corporate recruiting channel. */
+const FREE_HOSTING = [
+  'exblog.jp',
+  'blogspot.com',
+  'wordpress.com',
+  'wixsite.com',
+  'weebly.com',
+  'sites.google.com',
+  'over-blog.com',
+  'webnode.page',
+  'godaddysites.com',
+  'square.site',
+  'glitch.me',
+  'firebaseapp.com',
+  'netlify.app',
+];
+
+/** URL shorteners hide the true destination — a red flag in a job offer. */
+const URL_SHORTENERS = new Set([
+  'bit.ly',
+  'tinyurl.com',
+  'shorturl.at',
+  'cutt.ly',
+  'rb.gy',
+  't.co',
+  'goo.gl',
+  'ow.ly',
+  'rebrand.ly',
+  'is.gd',
+  'buff.ly',
+]);
+
+/** Classify a domain as an unofficial application channel, or null if it looks legitimate. */
+function channelKind(domain: string): 'aggregator' | 'free host' | 'link shortener' | null {
+  const d = domain.toLowerCase().replace(/^www\./, '');
+  if (KNOWN_AGGREGATORS.has(d)) return 'aggregator';
+  if (URL_SHORTENERS.has(d)) return 'link shortener';
+  if (FREE_HOSTING.some((h) => d === h || d.endsWith('.' + h))) return 'free host';
+  return null;
+}
+
 export function coverage(toolsUsed: AgentToolCall[]): number {
   const ok = new Set(
     toolsUsed.filter((t) => t.result.success && CORE_TOOLS.includes(t.tool)).map((t) => t.tool)
@@ -318,6 +370,100 @@ export function deriveSignals(
         break;
       }
     }
+  }
+
+  // --- South African fee / credential cues (locale-aware) -----------------
+  // The entity parser is $/£/€-centric and keys on US credential names; SA
+  // scams quote rand and ask for ID/SARS/banking documents. Detect both here
+  // so a rand-denominated "induction fee" scores like its USD twin, and the
+  // demand for ID/banking proof before any hire registers as a credential ask.
+  const has = (id: string) => signals.some((s) => s.id === id);
+
+  const feeCue =
+    evidence.match(
+      /\b(?:medical|induction|registration|admin(?:istration)?|application|processing|joining|training|activation|onboarding)\s+(?:and\s+[a-z]+\s+)?fees?\b/i
+    ) ||
+    evidence.match(/\b(?:fee|deposit|pay(?:ment)?)\b[^.\n]{0,25}\bR\s?\d[\d,. ]*/i) ||
+    evidence.match(/\bR\s?\d[\d,. ]*[^.\n]{0,25}\b(?:fee|deposit|non-?refundable|to start|to begin)\b/i);
+  if (feeCue && !has('upfront_payment_request')) {
+    signals.push({
+      id: 'upfront_payment_request',
+      label: 'Up-front payment requested',
+      category: 'red',
+      points: 35,
+      evidence: { source: 'text', detail: `Fee/payment demand: "${feeCue[0].trim().slice(0, 80)}"` },
+    });
+  }
+
+  const credentialCues = Array.from(
+    new Set(
+      (
+        evidence.match(
+          /\b(?:id\s?(?:copy|number|document)|copy of (?:your )?id|sars letter|proof of (?:banking|bank|residence|address)|bank(?:ing)? details|account number)\b/gi
+        ) || []
+      ).map((m) => m.toLowerCase())
+    )
+  );
+  // "Bring certified copies to your interview" is normal SA practice — only a
+  // request to *transmit* documents before a verified hire is a red flag.
+  const transmitContext = /\b(?:send|e-?mail|whats?app|submit|upload|forward|provide|share|attach|drop)\b/i.test(
+    text
+  );
+  if (credentialCues.length && transmitContext && !has('credential_request')) {
+    signals.push({
+      id: 'credential_request',
+      label: 'Sensitive details requested before hire',
+      category: 'red',
+      points: 25,
+      evidence: {
+        source: 'text',
+        detail: `Requested before any verified hire: ${credentialCues.slice(0, 4).join(', ')}`,
+      },
+    });
+  }
+
+  // --- Unofficial application channel (aggregator / free host / shortener) -
+  // A named employer whose application channel is a job-aggregator portal, a
+  // free website host, or a shortened link — the signature of the template ring
+  // that impersonates real brands. A registered company name does NOT make the
+  // channel legitimate; this is the counterweight to `company_registered`.
+  if (entities.companies.length) {
+    const flagged = entities.domains
+      .map((d) => ({ d, kind: channelKind(d) }))
+      .find((x) => x.kind);
+    if (flagged) {
+      signals.push({
+        id: 'unofficial_application_channel',
+        label: 'Application routed through an unofficial channel',
+        category: 'red',
+        points: 22,
+        evidence: {
+          source: 'entities',
+          detail: `Claims ${entities.companies[0]} but applications go to ${flagged.d} (${flagged.kind}) — not an official employer domain`,
+        },
+      });
+    }
+  }
+
+  // --- WhatsApp / personal-number-only application ------------------------
+  // No email, no website — apply only via a personal mobile / WhatsApp. Common
+  // to informal hiring, so it only nudges; it compounds with fee/credential cues.
+  const whatsappOnly =
+    /\bwhats?app\b/i.test(text) &&
+    entities.emails.length === 0 &&
+    entities.urls.length === 0 &&
+    (entities.phones.length > 0 || /\b0\d{2}[\s-]?\d{3}[\s-]?\d{4}\b/.test(evidence));
+  if (whatsappOnly) {
+    signals.push({
+      id: 'whatsapp_only_application',
+      label: 'Application only via WhatsApp / personal number',
+      category: 'red',
+      points: 10,
+      evidence: {
+        source: 'text',
+        detail: 'Hiring handled entirely over WhatsApp with no company email or careers page',
+      },
+    });
   }
 
   // --- Offer with no interview step --------------------------------------

@@ -1,0 +1,9 @@
+{
+  "name": "SA document-harvest via free-host link (synthetic)",
+  "evidence": "Now hiring at Vumani Staffing Solutions.\n\nTo apply, please submit the following documents: your CV, a copy of your ID, your SARS letter and proof of banking.\n\nSubmit everything at https://careers-vumani.blogspot.com and wait for a call.",
+  "expected_risk_levels": ["Suspicious", "Likely Scam"],
+  "expected_score_range": [35, 100],
+  "required_signals": ["credential_request", "unofficial_application_channel"],
+  "expect_network_match": false,
+  "notes": "Synthetic clone of the CV-harvest pattern. The apply link is on a free blog host (RDAP age would look old, so domain-age checks miss it) — the structural channel signal is what catches it. Demanding ID + SARS + banking proof up front is the credential red flag. Identifiers are fabricated."
+}

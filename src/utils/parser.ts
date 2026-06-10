@@ -85,8 +85,12 @@ export class EvidenceParser {
    * Validate and sanitize extracted entities
    */
   static sanitize(entities: Entities): Entities {
-    // TODO: Remove duplicates, validate formats, remove PII that shouldn't be logged
-
+    // Entities are deliberately preserved intact: a scam recruiter's email,
+    // domain, and phone ARE the fraud indicators the pipeline reasons over and
+    // the network indexes (POPIA s11(1)(f) legitimate interest). Sensitive
+    // identifiers of the data subject (SA ID / bank / card numbers) are NOT
+    // entities and are stripped from free-text at the log/store boundary — see
+    // backend/privacy/redaction.ts (used by POST /report and log masking).
     return entities;
   }
 

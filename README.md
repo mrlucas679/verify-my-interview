@@ -78,16 +78,27 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 `npm run eval` runs every scenario in `tests/test_cases/` through the full
 pipeline in reproducible offline mode (external keys scrubbed) and asserts
 risk-level band, score range, required/forbidden signals, and network-match
-expectations. `npm test` gates the same suite in Jest. Current run:
+expectations. `npm test` gates the same suite in Jest. Current run (11/11):
 
 | Case | Level | Score | Result |
 |---|---|---|---|
 | Ring-linked offer (shared scam infrastructure) | Likely Scam | 100 | PASS |
 | Obvious scam (Google impersonation) | Likely Scam | 100 | PASS |
 | Header-spoofed corporate email (SPF/DMARC fail) | Likely Scam | 67 | PASS |
+| SA document-harvest via free-host link | Suspicious | 59 | PASS |
 | Suspicious — mixed signals | Suspicious | 55 | PASS |
+| SA upfront-fee + WhatsApp-only retail scam | Suspicious | 45 | PASS |
+| SA brand-impersonation via job aggregator | Needs More Verification | 17 | PASS |
+| Legitimate recruiter on an unusual TLD (FP trap) | Low Risk | 12 | PASS |
+| Legitimate SA youth learnership (control) | Low Risk | 12 | PASS |
 | Legitimate job (Microsoft) | Low Risk | 0 | PASS |
 | Insufficient evidence | Inconclusive | 0 | PASS |
+
+The South African cases are **synthetic** scenarios modelled on real scam
+patterns (aggregator/free-host application channels, rand-denominated "induction
+fees", ID/SARS/banking-proof harvesting). The two legitimate controls — a real
+recruiter on an unusual `.us` TLD and a normal learnership — must **not** be
+flagged: falsely flagging a real recruiter is a defamation risk.
 
 These same evals caught real bugs during development — a brand-word
 entity-resolution false positive ("gift card: Microsoft" linking every email
@@ -159,7 +170,15 @@ This is a **risk assessment** tool, not an accusation engine: it reports
 evidence-backed risk with confidence and sources, and prefers "needs more
 verification" over false alarms. All network data shipped in this repo is
 synthetic demo data and is labeled as such in the UI. Evidence is treated as
-untrusted input; sensitive details are not logged.
+untrusted input.
+
+**Privacy (POPIA).** Sensitive identifiers — South African ID numbers, bank
+accounts, payment cards — are stripped from evidence before anything is logged
+or stored, while scam indicators (domains, emails, phones) are preserved as the
+investigative evidence they are. See [`docs/PRIVACY.md`](docs/PRIVACY.md) for the
+full POPIA posture (lawful basis, minimization, retention, special personal
+information, data-subject rights) and [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md)
+for the grounding, safety, evaluation, and hardening roadmap.
 
 ## Repo layout
 
@@ -169,11 +188,12 @@ src/backend/tools/        verification tool adapters (registry, RDAP/DNS, patter
 src/backend/network/      AI Search corpus, entity graph, trust levels, seed data
 src/backend/scorer/       signal engine + deterministic scorer
 src/backend/knowledge/    FTC/FBI/BBB guidance matching
+src/backend/privacy/      PII redaction & data minimization (POPIA)
 src/backend/ocr/          Azure Document Intelligence
 src/backend/scripts/      seedNetwork, runEvals, smoke
 frontend/                 React + Vite + Tailwind (Sentinel UI)
 tests/test_cases/         eval scenarios (run: npm run eval)
-docs/                     ARCHITECTURE, SPEC, TOOL_STRATEGY, REPORT_SCHEMA, ...
+docs/                     ARCHITECTURE, PRIVACY, PRODUCTION_READINESS, SPEC, ...
 ```
 
 ## License

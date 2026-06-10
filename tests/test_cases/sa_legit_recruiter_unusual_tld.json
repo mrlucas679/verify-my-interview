@@ -1,0 +1,9 @@
+{
+  "name": "Legitimate recruiter on an unusual TLD (false-positive trap, synthetic)",
+  "evidence": "From: thandi.molefe@kazirecruit.us\nSubject: Interview invitation - Financial Analyst\n\nDear Applicant,\n\nThank you for applying. We would like to invite you to an interview on 18 June 2026 at our Sandton office. Please bring a certified copy of your ID and your qualifications to the interview.\n\nNo payment is required at any stage of our process.\n\nKind regards,\nThandi Molefe\nTalent Partner, Kazi Recruit",
+  "expected_risk_levels": ["Low Risk", "Needs More Verification", "Inconclusive"],
+  "expected_score_range": [0, 35],
+  "forbidden_signals": ["upfront_payment_request", "credential_request", "unofficial_application_channel", "whatsapp_only_application"],
+  "expect_network_match": false,
+  "notes": "Synthetic. A real recruiter legitimately using a .us domain, inviting to a real interview, asking only that certified copies be BROUGHT to the interview (not transmitted), and explicitly charging no fee. The system must NOT flag this — an unusual TLD is not evidence of fraud, and 'bring to interview' is not a credential-harvest. Falsely flagging a real recruiter is a defamation risk."
+}

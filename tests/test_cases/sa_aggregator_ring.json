@@ -1,0 +1,10 @@
+{
+  "name": "SA brand-impersonation via job aggregator (synthetic)",
+  "evidence": "TRANSNOVA RAIL INTAKE 2026\n\nGeneral Workers (x60), Cleaners (x40), Security Officers (x20).\nSalary: R8 000 per month. No experience required.\n\nExciting opportunity at Transnova Rail for unemployed South African youth.\nApply online at https://tinyurl.com/transnova-intake or go to the official Transnova careers page.\n\nClosing date: 30 June 2026.",
+  "expected_risk_levels": ["Needs More Verification", "Suspicious"],
+  "expected_score_range": [10, 65],
+  "required_signals": ["unofficial_application_channel"],
+  "forbidden_signals": ["credential_request"],
+  "expect_network_match": false,
+  "notes": "Synthetic. The employer brand is named but the only application channel is a shortened link — the template-ring signature. A real brand name must NOT reassure when the apply channel is a shortener/aggregator. Identifiers are fabricated."
+}
