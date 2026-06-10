@@ -1,169 +1,180 @@
 # Verify My Interview
 
-An AI fraud investigation agent built with Microsoft Foundry to detect suspicious job offers and interview scams.
+A fraud-intelligence platform for job seekers, built on **Microsoft Foundry**.
 
-## Overview
+Most modern job scams don't look like scams: real company names, professional
+emails, polished offer letters. The fraud hides in the **relationships between
+pieces of evidence** — a "Google recruiter" whose domain was registered last
+month, a Reply-To that routes to a free mailbox, a USDT wallet that six prior
+victims reported under six different brand names.
 
-Verify My Interview uses multi-step reasoning and external verification tools to analyze evidence about potential job or interview scams. Instead of relying on pattern matching alone, it verifies claims against real-world data (company registries, domain records, DNS checks, URL reputation) and produces an explainable risk report.
+So instead of asking *"does this email look suspicious?"*, Verify My Interview
+asks *"what can we prove about this recruiter, company, domain, phone number,
+and payment trail?"* — and shows the proof.
 
-## One-Sentence Pitch
+## Four systems
 
-Verify My Interview uses a Microsoft Foundry reasoning agent to investigate suspicious job offers step by step, verify real-world evidence with tools, and produce an explainable scam-risk report that helps job seekers avoid fraud.
+1. **Evidence Collection** — paste an email (raw headers understood:
+   Reply-To mismatch, sender IP, SPF/DKIM/DMARC), upload a screenshot or PDF
+   (Azure AI Document Intelligence OCR), or drop a URL.
+2. **Investigation Engine** — six specialist Foundry agents collaborate:
+   Evidence → Verification → Research → Network → Critic → Report. Every
+   finding is `claim + evidence + confidence + source`; the Critic strikes
+   anything no tool result proves.
+3. **Fraud Intelligence Network** — reports live in an Azure AI Search vector
+   index and an entity graph over hard identifiers (domains, emails, phones,
+   payment handles — never names). Reports that share infrastructure are
+   promoted to `corroborated`; network signals are trust-weighted to resist
+   poisoning.
+4. **Conversational Detective** — interrogate the verdict, look identifiers up
+   in the graph, launch deeper checks, or have it draft a safe reply to the
+   recruiter.
 
-## Project Structure
+## Architecture
 
-```
-Verify My Interview/
-├── README.md                 # This file
-├── docs/                     # Documentation
-│   ├── SPEC.md              # Full system specification
-│   ├── ARCHITECTURE.md      # System architecture
-│   ├── AGENT_INSTRUCTIONS.md # Agent guidelines
-│   ├── TOOL_STRATEGY.md     # Tool call strategy
-│   └── REPORT_SCHEMA.md     # Output report schema
-├── src/
-│   ├── backend/
-│   │   ├── tools/           # External verification tools
-│   │   │   ├── company_registry.ts
-│   │   │   ├── domain_rdap.ts
-│   │   │   ├── dns_checks.ts
-│   │   │   ├── url_reputation.ts
-│   │   │   ├── web_reputation.ts
-│   │   │   ├── scam_patterns.ts
-│   │   │   └── index.ts
-│   │   ├── agent/           # Foundry reasoning agent
-│   │   │   ├── instructions.ts
-│   │   │   └── orchestrator.ts
-│   │   ├── scorer/          # Risk scoring logic
-│   │   │   └── deterministic_scorer.ts
-│   │   ├── reporter/        # Report generation
-│   │   │   └── report_writer.ts
-│   │   └── server.ts        # Express API server
-│   ├── types/
-│   │   ├── entities.ts      # Data structures
-│   │   ├── report.ts        # Report schema
-│   │   └── tool_results.ts  # Tool return types
-│   └── utils/
-│       ├── parser.ts        # Evidence parser
-│       └── validators.ts    # Input validation
-├── tests/
-│   ├── test_cases/          # Test scenarios
-│   │   ├── obvious_scam.json
-│   │   ├── company_impersonation.json
-│   │   ├── legitimate_job.json
-│   │   ├── low_evidence.json
-│   │   └── inconclusive.json
-│   └── unit/
-│       ├── tools.test.ts
-│       ├── scorer.test.ts
-│       └── parser.test.ts
-├── package.json
-├── tsconfig.json
-└── .env.example
+```mermaid
+flowchart TB
+  subgraph Intake["Evidence Collection"]
+    A[Email / raw headers] --> P
+    B[Screenshot / PDF<br/>Azure Document Intelligence OCR] --> P
+    C[URL / text] --> P
+  end
+  P[Evidence Agent<br/>entity + header extraction]
+  subgraph Engine["Investigation Engine — Microsoft Foundry agents"]
+    P --> V[Verification Agent<br/>registry · RDAP · DNS tools]
+    V --> R[Research Agent<br/>web/OSINT, cited]
+    R --> N[Network Agent<br/>vector + graph match]
+    N --> K[Critic Agent<br/>removes unproven claims]
+    K --> S[Deterministic Scorer<br/>signals → 0-100]
+    S --> W[Report Agent<br/>narrative + FTC/FBI/BBB citations]
+  end
+  subgraph Intel["Fraud Intelligence Network"]
+    X[(Azure AI Search<br/>vector index)] <--> N
+    G[Entity Graph<br/>domains · phones · wallets · trust levels] <--> N
+  end
+  W --> UI[Sentinel UI<br/>report · evidence graph · network page]
+  UI <--> D[Conversational Detective<br/>Foundry agent + graph_lookup tool]
 ```
 
-## Key Features
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
-- **Multi-Step Reasoning**: Uses Foundry reasoning agent to plan and execute verification steps
-- **External Verification**: Checks company registries, domain records, DNS, URL reputation
-- **Deterministic Scoring**: Combines verified signals into a transparent risk score
-- **Explainable Output**: Each risk factor is traced to tool results and reasoning steps
-- **Privacy-Safe**: No sensitive data in logs, respects user privacy
+## What makes it different
 
-## Risk Levels
+- **The evidence graph.** The report page renders the case's identifiers
+  connected to prior reports. In the demo corpus, one wallet links six reports
+  impersonating six different companies — click any node and see the proof.
+  Scammers rotate brand names; they reuse infrastructure.
+- **Agents never set the score.** Reasoning plans the investigation; a
+  transparent deterministic scorer sums evidence-backed signals into the
+  0–100 risk score. Every point is traceable.
+- **Cited guidance.** Verdicts attach the FTC / FBI IC3 / BBB guidance that
+  matches the signals the case actually triggered, with real source URLs.
+- **Always demoable.** Every agent has a deterministic fallback. Unset the
+  Azure env vars and the same case still completes — the trace just says
+  `deterministic` instead of `foundry`.
 
-- **Low Risk**: Strong verification, legitimate signals
-- **Needs More Verification**: Mixed signals, missing evidence
-- **Suspicious**: Multiple red flags, inconsistencies
-- **Likely Scam**: Strong evidence of scam patterns
-- **Inconclusive**: Insufficient evidence to assess
+## Evals
 
-## Implementation Priority
+`npm run eval` runs every scenario in `tests/test_cases/` through the full
+pipeline in reproducible offline mode (external keys scrubbed) and asserts
+risk-level band, score range, required/forbidden signals, and network-match
+expectations. `npm test` gates the same suite in Jest. Current run:
 
-1. Backend tools setup (company lookup, domain checks, etc.)
-2. Define OpenAPI/function schemas
-3. Create Foundry reasoning agent
-4. Connect Express server to agent
-5. Add deterministic scorer
-6. Add report writer
-7. Add traces and evaluation cases
+| Case | Level | Score | Result |
+|---|---|---|---|
+| Ring-linked offer (shared scam infrastructure) | Likely Scam | 100 | PASS |
+| Obvious scam (Google impersonation) | Likely Scam | 100 | PASS |
+| Header-spoofed corporate email (SPF/DMARC fail) | Likely Scam | 67 | PASS |
+| Suspicious — mixed signals | Suspicious | 55 | PASS |
+| Legitimate job (Microsoft) | Low Risk | 0 | PASS |
+| Insufficient evidence | Inconclusive | 0 | PASS |
 
-## Demo Workflow
+These same evals caught real bugs during development — a brand-word
+entity-resolution false positive ("gift card: Microsoft" linking every email
+that mentioned Microsoft) and a zero-evidence case being nudged into
+reassuring "Low Risk".
 
-1. User uploads suspicious interview email and messages
-2. Agent extracts company, recruiter email, payment request, URL
-3. Agent calls tools in sequence:
-   - Company registry lookup
-   - Domain RDAP check
-   - DNS record verification
-   - Scam pattern detection
-   - Web reputation search
-4. Agent produces risk report with score, confidence, and reasoning
-
-## Development
-
-See individual documentation files in `docs/` for:
-
-- Full specification and design decisions
-- Tool schemas and API contracts
-- Agent instructions and reasoning rules
-- Test case definitions
-
-## Getting Started
+## Quick start (no Azure required)
 
 ```bash
-# Install dependencies
 npm install
-
-# Set up environment
-cp .env.example .env
-
-# Build + run server
-npm run build && npm start
-# or, for development with reload:
-npm run dev
+npm run build        # backend tsc + frontend vite -> public/
+npm start            # http://localhost:3000
 ```
 
-Send a case to the agent:
+Or for development: `npm run dev` (API) + `npm run dev:web` (Vite).
+
+Try a case:
 
 ```bash
 curl -X POST http://localhost:3000/analyze \
   -H "Content-Type: application/json" \
-  -d '{"evidence":"Pay a $200 upfront training fee via gift card to start your remote job. Urgent!"}'
+  -d '{"evidence":"From: d.okafor@nimbus-talent-hr.com\nReply-To: nimbus.onboarding@gmail.com\nSubject: Final onboarding - QA Analyst at Google\n\nA refundable compliance deposit of $200 is required, payable in USDT to wallet TQrKp4mNbu77 or Zelle: nimbus-onboard. Reach us on WhatsApp +1 (332) 555-0144."}'
 ```
 
-## Microsoft Foundry Setup
+Without Azure configured the pipeline runs deterministically and the network
+is seeded in-memory — the response still includes the verdict, six-stage
+trace, signals, and the case subgraph linking this wallet/domain/phone to the
+seeded ring.
 
-The reasoning agent runs on **Microsoft Foundry (Azure AI Foundry) Agent Service**
-via the `@azure/ai-agents` SDK. Authentication uses **Microsoft Entra ID**
-(`DefaultAzureCredential`) — there is no API key.
+## Microsoft Foundry setup (full engine)
+
+Auth is **Microsoft Entra ID** (`DefaultAzureCredential`) — no API keys in code.
 
 1. Create a Foundry project and deploy a model (e.g. `gpt-4o`).
-2. Sign in locally so the SDK can get a token:
+2. `az login`
+3. Configure `.env` (see [.env.example](.env.example) for every subsystem):
 
-   ```bash
-   az login
-   ```
+```bash
+AZURE_AI_PROJECT_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
+AZURE_AI_MODEL_DEPLOYMENT=gpt-4o
+# optional extras
+AZURE_SEARCH_ENDPOINT=...        # semantic network matching
+AZURE_SEARCH_API_KEY=...
+AZURE_DOCINT_ENDPOINT=...        # OCR uploads
+AZURE_DOCINT_KEY=...
+SERPAPI_API_KEY=...              # Research agent web/OSINT
+```
 
-3. Configure `.env`:
+4. Seed the intelligence network index: `npm run seed:network`
 
-   ```bash
-   AZURE_AI_PROJECT_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
-   AZURE_AI_MODEL_DEPLOYMENT=gpt-4o
-   ```
+Deployment to Azure Container Apps is covered by the
+`.claude/skills/deploy-azure-foundry` skill.
 
-How it runs:
+## API
 
-- **Endpoint set** → the agent investigates with multi-step reasoning, calling the
-  verification tools (`lookup_company_registry`, `lookup_domain_rdap`,
-  `detect_scam_patterns`) through Foundry's function-calling loop.
-- **Endpoint blank** → the app automatically uses a built-in **deterministic
-  engine** so it stays demoable without an Azure subscription. The response's
-  `engine` field (and server logs) indicate which path ran.
+| Endpoint | Purpose |
+|---|---|
+| `POST /analyze` | Investigate evidence → report + trace + signals + case subgraph |
+| `POST /chat` | Case-aware detective (tools: graph lookup, deeper checks, reply drafting) |
+| `POST /upload` | OCR a screenshot/PDF via Document Intelligence |
+| `POST /report` | Submit a report to the intelligence network |
+| `GET /network/graph` | Full entity graph (`?type=&minTrust=`) |
+| `GET /network/stats` | Threat statistics over the corpus |
+| `GET /health` | Per-subsystem status flags |
 
-> Note: `src/infrastructure/db.ts` (MongoDB/Redis) is unused scaffolding and is
-> excluded from the build. The verification services cache in-memory; wire it up
-> and `npm i mongoose redis` only if you adopt an external cache.
+## Safety
+
+This is a **risk assessment** tool, not an accusation engine: it reports
+evidence-backed risk with confidence and sources, and prefers "needs more
+verification" over false alarms. All network data shipped in this repo is
+synthetic demo data and is labeled as such in the UI. Evidence is treated as
+untrusted input; sensitive details are not logged.
+
+## Repo layout
+
+```
+src/backend/agent/        orchestrator + the six specialist agents (Foundry runner + fallbacks)
+src/backend/tools/        verification tool adapters (registry, RDAP/DNS, patterns, web research)
+src/backend/network/      AI Search corpus, entity graph, trust levels, seed data
+src/backend/scorer/       signal engine + deterministic scorer
+src/backend/knowledge/    FTC/FBI/BBB guidance matching
+src/backend/ocr/          Azure Document Intelligence
+src/backend/scripts/      seedNetwork, runEvals, smoke
+frontend/                 React + Vite + Tailwind (Sentinel UI)
+tests/test_cases/         eval scenarios (run: npm run eval)
+docs/                     ARCHITECTURE, SPEC, TOOL_STRATEGY, REPORT_SCHEMA, ...
+```
 
 ## License
 
