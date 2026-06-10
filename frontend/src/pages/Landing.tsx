@@ -1,22 +1,36 @@
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowRight, Search, ScanSearch, FileText, Network, ShieldCheck } from 'lucide-react';
+import {
+  ArrowRight,
+  FileSearch,
+  ScanSearch,
+  Network,
+  ShieldCheck,
+  Search,
+  FileText,
+  MessageSquare,
+} from 'lucide-react';
 
 const STEPS = [
   {
-    icon: Search,
-    title: 'Investigate',
-    body: 'An agent extracts every entity and runs real checks — company registry, domain age, DNS, links, payment methods.',
+    icon: FileSearch,
+    title: 'Collect evidence',
+    body: 'Paste an email with headers, upload a screenshot or offer letter, or drop a link. Every entity is extracted — sender, Reply-To, domains, phones, payment requests.',
   },
   {
     icon: ScanSearch,
-    title: 'Verify',
-    body: 'A critic agent reviews each finding against the evidence and drops anything the tools do not actually prove.',
+    title: 'Six agents investigate',
+    body: 'Specialist agents verify the company registry, domain age and DNS, search the public web, and a critic strikes any claim the tools cannot prove.',
   },
   {
-    icon: FileText,
-    title: 'Report',
-    body: 'You get a clear verdict with confidence, the reasoning trail, and concrete next steps — proof, not guesses.',
+    icon: Network,
+    title: 'Match the network',
+    body: 'Identifiers are checked against a graph of prior reports. Scammers rename brands — but reuse domains, phone numbers and wallets. That is how rings surface.',
+  },
+  {
+    icon: MessageSquare,
+    title: 'Ask the detective',
+    body: 'Interrogate the verdict, inspect the proof behind each finding, dig deeper with more checks, or have it draft a safe reply to the recruiter.',
   },
 ];
 
@@ -31,14 +45,15 @@ export function Landing() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5 }}
           >
-            <span className="eyebrow">AI fraud detective</span>
+            <span className="eyebrow">Fraud intelligence platform</span>
             <h1 className="mx-auto mt-4 max-w-3xl font-display text-4xl font-semibold leading-[1.08] tracking-tight text-white sm:text-6xl">
               Know if a job offer is real.
               <span className="block text-muted">Before you reply, before you pay.</span>
             </h1>
             <p className="mx-auto mt-6 max-w-xl text-base leading-relaxed text-muted">
-              Verify My Interview runs a full investigation on suspicious recruiter emails, messages
-              and links — then checks them against a network of reported scams.
+              Modern job scams use real company names and professional emails. The fraud hides in
+              the relationships between evidence — so we investigate the recruiter, domain, phone
+              and payment trail, and prove every finding.
             </p>
             <div className="mt-9 flex items-center justify-center gap-3">
               <Link to="/new" className="btn-primary">
@@ -54,7 +69,7 @@ export function Landing() {
 
       {/* How it works */}
       <section className="mx-auto max-w-6xl px-6 py-16">
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           {STEPS.map((s, i) => {
             const Icon = s.icon;
             return (
@@ -89,12 +104,12 @@ export function Landing() {
               Every report makes the next person safer.
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-muted">
-              Reported scams are matched semantically against new cases — catching reworded emails,
-              shared payment details, renamed companies and repeat locations, even when the wording
-              changes.
+              Reports that share hard infrastructure — domains, phone numbers, payment handles —
+              are linked into an entity graph and promoted to corroborated. New cases are matched
+              semantically and structurally, even when every word has changed.
             </p>
-            <Link to="/new" className="btn-ghost mt-6">
-              Check an offer <ArrowRight className="h-4 w-4" />
+            <Link to="/network" className="btn-ghost mt-6">
+              Explore the network <ArrowRight className="h-4 w-4" />
             </Link>
           </div>
           <div className="grid grid-cols-2 gap-3">
