@@ -1,12 +1,13 @@
 {
   "name": "Obvious Scam - Google Impersonation",
-  "evidence": "From: recruiter@abc-solutions.com\nSubject: Exciting opportunity at Google!\n\nDear Applicant,\nCongratulations! We are hiring for Google. Please complete our training program for $50 upfront fee.\nLink: http://abc-solutions.com/apply\nBest regards,\nGoogle HR Team",
-  "expected_risk_level": "Likely Scam",
-  "expected_score_range": [85, 100],
+  "evidence": "From: recruiter@google-careers-hiring.net\nSubject: Congratulations! Final step for your Google position\n\nDear Applicant,\n\nCongratulations! You have been selected for a remote Customer Support position at Google. To activate your onboarding, you must complete our training program for a $50 upfront fee, payable by Apple gift card.\n\nThis offer expires in 24 hours, so act immediately. To set up your direct salary payments, also reply with your bank account number and SSN.\n\nLink: http://google-careers-hiring.net/apply\n\nBest regards,\nGoogle HR Team",
+  "expected_risk_levels": ["Likely Scam"],
+  "expected_score_range": [71, 100],
+  "required_signals": ["upfront_payment_request", "credential_request", "urgency_pressure"],
   "key_red_flags": [
-    "Upfront payment request",
-    "Email domain mismatch (abc-solutions.com vs google.com)",
-    "Recruiter domain recently registered",
-    "URL points to different domain"
+    "Upfront payment request (gift card)",
+    "Sensitive credentials requested before hire",
+    "Urgency pressure (24-hour deadline)",
+    "Lookalike domain claiming to be Google"
   ]
 }

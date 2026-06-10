@@ -32,6 +32,16 @@ export interface RiskReport {
   missing_evidence: string[];
   recommended_next_steps: string[];
   tool_results_used: string[];
+  guidance_citations: GuidanceCitation[];
+}
+
+/** Official guidance (FTC / FBI IC3 / BBB) matched to triggered signals. */
+export interface GuidanceCitation {
+  title: string;
+  source: string;
+  url: string;
+  excerpt: string;
+  matched_signals: string[];
 }
 
 /** An evidence-backed claim emitted by a pipeline stage. */

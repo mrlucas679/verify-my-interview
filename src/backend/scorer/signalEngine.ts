@@ -116,6 +116,19 @@ export function deriveSignals(
       ...(pd.payment_methods || []),
       ...entities.money_requests.filter((m) => /fee|upfront|gift\s?card|wire|crypto|bitcoin|deposit/i.test(m)),
     ];
+    // Demand phrasing in the evidence itself ("a compliance deposit of $200 is
+    // required", "pay via USDT/Zelle"). "direct deposit" payroll language does
+    // not match — the amount or payment rail must be tied to the demand.
+    if (!paymentCues.length) {
+      const demand = [
+        /\b(?:deposit|fee)\s*(?:of\s*)?\$\s?\d[\d,.]*/i,
+        /\$\s?\d[\d,.]*[^.\n]{0,30}\b(?:fee|deposit|upfront|is required)/i,
+        /\b(?:pay|payment|send)\b[^.\n]{0,40}\b(?:usdt|btc|crypto(?:currency)?|gift\s?cards?|wire transfer|zelle|cash\s?app)/i,
+      ]
+        .map((re) => evidence.match(re))
+        .find(Boolean);
+      if (demand) paymentCues.push(demand[0].trim());
+    }
     if (paymentCues.length) {
       signals.push({
         id: 'upfront_payment_request',

@@ -37,7 +37,8 @@ export class ReportWriter {
       positive_signals: positiveSignals,
       missing_evidence: missingEvidence,
       recommended_next_steps: nextSteps,
-      tool_results_used: scoringContext.tool_results_used
+      tool_results_used: scoringContext.tool_results_used,
+      guidance_citations: []
     };
   }
 

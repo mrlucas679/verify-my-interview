@@ -16,6 +16,19 @@ export interface RiskReport {
   missing_evidence: string[];
   recommended_next_steps: string[];
   tool_results_used: string[];
+  guidance_citations: GuidanceCitation[];
+}
+
+/**
+ * Official guidance (FTC / FBI IC3 / BBB) cited because the case triggered
+ * the signals it covers. `url` always points at the original source.
+ */
+export interface GuidanceCitation {
+  title: string;
+  source: string;
+  url: string;
+  excerpt: string;
+  matched_signals: string[];
 }
 
 export interface SignalSet {

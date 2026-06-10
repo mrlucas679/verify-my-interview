@@ -1,0 +1,9 @@
+{
+  "name": "Header-spoofed corporate email (auth failures)",
+  "evidence": "From: Microsoft Talent Acquisition <talent@microsoft.com>\nReply-To: msft.recruiting2026@gmail.com\nReceived: from unknown (198.51.100.23) by mx.recipient.com\nAuthentication-Results: mx.recipient.com; spf=fail smtp.mailfrom=microsoft.com; dmarc=fail\nSubject: Interview confirmation - Cloud Support Engineer\n\nDear Candidate,\n\nYour profile has been shortlisted for the Cloud Support Engineer position. The\ninterview will be conducted entirely via chat. To proceed with onboarding,\nplease send a scan of your passport and your bank account details for payroll\nregistration within 24 hours.\n\nRegards,\nMicrosoft Talent Team",
+  "expected_risk_levels": ["Suspicious", "Likely Scam"],
+  "expected_score_range": [41, 100],
+  "required_signals": ["reply_to_mismatch", "spf_fail", "dmarc_fail", "credential_request"],
+  "expect_network_match": false,
+  "notes": "The sender claims microsoft.com but fails SPF/DMARC and routes replies to a free mailbox — the wording alone looks professional; the headers tell the truth."
+}

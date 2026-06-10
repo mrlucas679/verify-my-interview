@@ -38,6 +38,25 @@ export function normalizeHandle(raw: string): string {
   return raw.toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
+/**
+ * Identifier-shaped payment tokens in free text: crypto wallet addresses after
+ * a wallet/coin cue, and Zelle / Cash App / Venmo style tags. Deliberately
+ * narrow — brand or method words ("gift card: Microsoft") are NOT identifiers
+ * and must never link cases (that is how name-based false positives happen).
+ */
+export function extractHandleTokens(text: string): Set<string> {
+  const tokens = new Set<string>();
+  for (const m of text.matchAll(/\b(?:wallet|usdt|btc|eth|crypto)\b[^a-z0-9]{0,12}([a-z0-9]{8,})/gi)) {
+    tokens.add(m[1].toLowerCase());
+  }
+  for (const m of text.matchAll(
+    /\b(?:zelle|cash\s?app|venmo|paypal)\b\s*[:\s]\s*(\$?[a-z0-9][\w.-]{3,})/gi
+  )) {
+    tokens.add(m[1].toLowerCase());
+  }
+  return tokens;
+}
+
 function nodeId(type: NodeType, value: string): string {
   return `${type}:${value}`;
 }
@@ -375,14 +394,20 @@ export class EntityGraphService {
       ...entities.emails.map((e) => nodeId('email', normalizeEmail(e))),
       ...entities.phones.map((p) => nodeId('phone', normalizePhone(p))),
     ];
-    // Payment handles (wallets, Zelle tags) appear as free text in the evidence;
-    // match the distinctive token of each known handle against it.
+    // Payment handles (wallets, Zelle/CashApp tags) appear as free text in the
+    // evidence. Extract identifier-shaped tokens and EXACT-match them against
+    // known handle nodes — substring/brand matching would link every email
+    // that merely mentions a company name.
     if (this.built) {
-      const text = `${evidenceText} ${entities.money_requests.join(' ')}`.toLowerCase();
-      for (const n of this.built.graph.nodes) {
-        if (n.type !== 'payment_handle') continue;
-        const token = n.label.toLowerCase().split(/[:\s]+/).pop() ?? '';
-        if (token.length >= 6 && text.includes(token)) ids.push(n.id);
+      const caseTokens = extractHandleTokens(
+        `${evidenceText} ${entities.money_requests.join(' ')}`
+      );
+      if (caseTokens.size) {
+        for (const n of this.built.graph.nodes) {
+          if (n.type !== 'payment_handle') continue;
+          const token = n.label.toLowerCase().split(/[:\s]+/).pop() ?? '';
+          if (caseTokens.has(token)) ids.push(n.id);
+        }
       }
     }
     return [...new Set(ids)];

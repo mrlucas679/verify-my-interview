@@ -10,6 +10,7 @@ import { Findings } from '../components/Findings';
 import { NetworkMatches } from '../components/NetworkMatches';
 import { ChatPanel } from '../components/ChatPanel';
 import { EvidenceGraph } from '../components/EvidenceGraph';
+import { GuidanceCitations } from '../components/GuidanceCitations';
 import type { PipelineTrace } from '../lib/types';
 
 const STEPS = [
@@ -119,6 +120,13 @@ export function Report() {
             <SectionLabel>Findings &amp; evidence</SectionLabel>
             <Findings signals={result.signals} />
           </div>
+
+          {result.report.guidance_citations?.length > 0 && (
+            <div>
+              <SectionLabel>Official guidance</SectionLabel>
+              <GuidanceCitations citations={result.report.guidance_citations} />
+            </div>
+          )}
 
           {result.graph && result.graph.nodes.length > 1 && (
             <div>

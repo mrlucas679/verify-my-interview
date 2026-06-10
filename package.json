@@ -11,6 +11,7 @@
     "build:web": "npm --prefix frontend install && npm --prefix frontend run build",
     "start": "node dist/src/backend/server.js",
     "seed:network": "tsx src/backend/scripts/seedNetwork.ts",
+    "eval": "tsx src/backend/scripts/runEvals.ts",
     "test": "jest",
     "test:watch": "jest --watch",
     "lint": "eslint src --ext .ts",

@@ -1,0 +1,13 @@
+{
+  "name": "Ring-linked offer (shared scam infrastructure)",
+  "evidence": "From: Daniel Okafor <d.okafor@nimbus-talent-hr.com>\nReply-To: nimbus.onboarding@gmail.com\nReceived: from mail.nimbus-talent-hr.com (203.0.113.45) by mx.recipient.com\nAuthentication-Results: mx.recipient.com; spf=fail smtp.mailfrom=nimbus-talent-hr.com; dmarc=fail\nSubject: Final onboarding step - Senior QA Analyst (Remote) at Google\n\nDear Candidate,\n\nFollowing your successful screening, we are pleased to confirm your selection for the\nSenior QA Analyst (Remote) position at Google, facilitated through our talent partner\nNimbus Talent.\n\nTo activate your equipment shipment and payroll profile, a refundable compliance\ndeposit of $200 is required. Payment can be made in USDT to wallet TQrKp4mNbu77 or\nvia Zelle: nimbus-onboard.\n\nKindly complete this within 24 hours to retain your slot. For any questions, reach\nour onboarding desk on WhatsApp at +1 (332) 555-0144 or visit\nhttps://nimbustalent-careers.net/onboarding.\n\nWarm regards,\nDaniel Okafor\nSenior Talent Acquisition Lead",
+  "expected_risk_levels": ["Likely Scam"],
+  "expected_score_range": [71, 100],
+  "required_signals": [
+    "reply_to_mismatch",
+    "upfront_payment_request",
+    "network_infrastructure_match"
+  ],
+  "expect_network_match": true,
+  "notes": "The demo case: a NEW email whose domain, wallet, and phone are reused by the seeded Nimbus Talent ring. The network link must be discovered structurally, not hardcoded."
+}

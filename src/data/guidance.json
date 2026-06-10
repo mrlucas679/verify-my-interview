@@ -1,0 +1,60 @@
+[
+  {
+    "id": "ftc_job_scams",
+    "source": "FTC",
+    "title": "FTC Consumer Advice — Job Scams",
+    "url": "https://consumer.ftc.gov/articles/job-scams",
+    "excerpt": "Honest employers will never ask you to pay to get a job. Anyone who asks you to pay upfront for equipment, training, or onboarding — or pressures you to act immediately — is showing classic signs of a job scam.",
+    "signal_ids": ["upfront_payment_request", "urgency_pressure", "high_keyword_score"]
+  },
+  {
+    "id": "ftc_gift_cards",
+    "source": "FTC",
+    "title": "FTC Consumer Advice — Gift Card Payment Demands",
+    "url": "https://consumer.ftc.gov/articles/avoiding-and-reporting-gift-card-scams",
+    "excerpt": "Gift cards are for gifts, not payments. Anyone who demands payment by gift card, wire transfer, or cryptocurrency for a job, fee, or deposit is a scammer — these payment methods are chosen because they are nearly impossible to reverse.",
+    "signal_ids": ["upfront_payment_request"]
+  },
+  {
+    "id": "ic3_employment_scams",
+    "source": "FBI IC3",
+    "title": "FBI IC3 PSA — Employment Scams Using Fake Interviews",
+    "url": "https://www.ic3.gov/Media/Y2020/PSA200121",
+    "excerpt": "Cyber criminals impersonate legitimate businesses and conduct false interviews — often entirely over chat or email — then request personally identifiable information or banking details before any real hiring process has occurred.",
+    "signal_ids": ["credential_request", "no_interview_offer", "freemail_corporate_claim"]
+  },
+  {
+    "id": "ic3_crypto_work",
+    "source": "FBI IC3",
+    "title": "FBI IC3 PSA — Work-From-Home Scams Demanding Crypto Payments",
+    "url": "https://www.ic3.gov/Media/Y2024/PSA240605",
+    "excerpt": "Fraudsters posing as recruiters direct victims to make cryptocurrency payments to 'activate' accounts or unlock earnings. Any employer that requires crypto payments as a condition of work is operating a scam.",
+    "signal_ids": ["upfront_payment_request", "network_infrastructure_match"]
+  },
+  {
+    "id": "ftc_phishing",
+    "source": "FTC",
+    "title": "FTC Consumer Advice — Recognizing Phishing",
+    "url": "https://consumer.ftc.gov/articles/how-recognize-and-avoid-phishing-scams",
+    "excerpt": "Phishing emails often spoof a trusted organization while the real sender address, Reply-To, or links point somewhere else entirely. A message that fails sender authentication or routes replies to an unrelated mailbox should not be trusted.",
+    "signal_ids": ["reply_to_mismatch", "spf_fail", "dmarc_fail", "lookalike_domain", "freemail_corporate_claim"]
+  },
+  {
+    "id": "bbb_job_scam_study",
+    "source": "BBB",
+    "title": "BBB Scam Study — Job Scams",
+    "url": "https://www.bbb.org/all/scamstudies/job_scams/job_scam_study",
+    "excerpt": "BBB research found job scams routinely impersonate real companies using newly created lookalike domains and recycled contact infrastructure. Verifying the recruiter through the company's official careers channel is the single most effective defense.",
+    "signal_ids": [
+      "recently_registered_domain",
+      "newish_domain",
+      "disposable_email_domain",
+      "no_mx_records",
+      "lookalike_domain",
+      "company_not_in_registry",
+      "web_scam_warnings",
+      "network_match",
+      "network_infrastructure_match"
+    ]
+  }
+]

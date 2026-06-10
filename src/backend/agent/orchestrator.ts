@@ -7,7 +7,7 @@
 // always computed by the deterministic signal engine + scorer — agents gather
 // and vet evidence, they never set the score.
 
-import { RiskReport, StructuredSignal, Finding } from '../../types/report';
+import { RiskReport, RiskLevel, StructuredSignal, Finding } from '../../types/report';
 import { Entities } from '../../types/entities';
 import { ToolOrchestrator } from '../tools';
 import { FoundryRunner, getFoundrySettings } from './foundryRunner';
@@ -20,6 +20,7 @@ import { VerifierAgent } from './agents/verifierAgent';
 import { ReporterAgent } from './agents/reporterAgent';
 import { deriveSignals, coverage } from '../scorer/signalEngine';
 import { scoreStructuredSignals, levelFromScore } from '../scorer/deterministic_scorer';
+import { matchGuidance } from '../knowledge/guidance';
 import { EntityGraph, NetworkMatch } from '../network/types';
 
 export type StageName = 'evidence' | 'verification' | 'research' | 'network' | 'critic' | 'report';
@@ -160,10 +161,20 @@ export class AgentOrchestrator {
     stages.push(crit.trace);
     const verified = crit.result;
 
-    // Transparent scoring from the structured signals.
+    // Transparent scoring from the structured signals. With zero signals and
+    // no verifiable identifiers in the evidence there is nothing to conclude —
+    // never let a confidence nudge turn "no evidence" into reassuring "Low Risk".
     const scored = scoreStructuredSignals(signals, cov);
     const confidence = Math.max(0, Math.min(1, scored.confidence + verified.confidence_adjustment));
-    const level = levelFromScore(scored.score, confidence);
+    const nothingToVerify =
+      entities.companies.length === 0 &&
+      entities.emails.length === 0 &&
+      entities.domains.length === 0 &&
+      entities.urls.length === 0;
+    const level: RiskLevel =
+      signals.length === 0 && nothingToVerify
+        ? 'Inconclusive'
+        : levelFromScore(scored.score, confidence);
 
     const redFlags = signals.filter((s) => s.category === 'red').map((s) => s.label);
     const positives = signals.filter((s) => s.category === 'positive').map((s) => s.label);
@@ -208,6 +219,7 @@ export class AgentOrchestrator {
       missing_evidence: this.deriveMissingEvidence(entities, toolsUsed.length),
       recommended_next_steps: narrative.recommended_next_steps,
       tool_results_used: toolsUsed.map((t) => t.tool),
+      guidance_citations: matchGuidance(signals),
     };
 
     const engines = new Set<AgentEngine>(stages.map((s) => s.engine));
