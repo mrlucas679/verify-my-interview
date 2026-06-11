@@ -16,7 +16,9 @@ and payment trail?"* — and shows the proof.
 
 1. **Evidence Collection** — paste an email (raw headers understood:
    Reply-To mismatch, sender IP, SPF/DKIM/DMARC), upload a screenshot or PDF
-   (Azure AI Document Intelligence OCR), or drop a URL.
+   (Azure AI Document Intelligence OCR), drop a URL, or **tell us what happened
+   by voice** (Azure AI Speech transcription) — for scams that ran over WhatsApp
+   calls or voice notes, where there's no email to forward.
 2. **Investigation Engine** — six specialist Foundry agents collaborate:
    Evidence → Verification → Research → Network → Critic → Report. Every
    finding is `claim + evidence + confidence + source`; the Critic strikes
@@ -38,6 +40,7 @@ flowchart TB
     A[Email / raw headers] --> P
     B[Screenshot / PDF<br/>Azure Document Intelligence OCR] --> P
     C[URL / text] --> P
+    VN[Voice note<br/>Azure AI Speech transcription] --> P
   end
   P[Evidence Agent<br/>entity + header extraction]
   subgraph Engine["Investigation Engine — Microsoft Foundry agents"]
@@ -144,6 +147,8 @@ AZURE_SEARCH_ENDPOINT=...        # semantic network matching
 AZURE_SEARCH_API_KEY=...
 AZURE_DOCINT_ENDPOINT=...        # OCR uploads
 AZURE_DOCINT_KEY=...
+AZURE_SPEECH_REGION=...          # voice transcription ("Tell Us What Happened")
+AZURE_SPEECH_KEY=...
 SERPAPI_API_KEY=...              # Research agent web/OSINT
 ```
 
@@ -158,6 +163,7 @@ Deployment to Azure Container Apps is covered by the
 |---|---|
 | `POST /analyze` | Investigate evidence → report + trace + signals + case subgraph |
 | `POST /chat` | Case-aware detective (tools: graph lookup, deeper checks, reply drafting) |
+| `POST /transcribe` | Transcribe a voice note (Azure AI Speech) for investigation |
 | `POST /upload` | OCR a screenshot/PDF via Document Intelligence |
 | `POST /report` | Submit a report to the intelligence network |
 | `GET /network/graph` | Full entity graph (`?type=&minTrust=`) |
@@ -175,7 +181,9 @@ untrusted input.
 **Privacy (POPIA).** Sensitive identifiers — South African ID numbers, bank
 accounts, payment cards — are stripped from evidence before anything is logged
 or stored, while scam indicators (domains, emails, phones) are preserved as the
-investigative evidence they are. See [`docs/PRIVACY.md`](docs/PRIVACY.md) for the
+investigative evidence they are. Every channel — typed, OCR'd, or
+voice-transcribed — passes the same redaction boundary, and raw audio is never
+retained (transcript only). See [`docs/PRIVACY.md`](docs/PRIVACY.md) for the
 full POPIA posture (lawful basis, minimization, retention, special personal
 information, data-subject rights) and [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md)
 for the grounding, safety, evaluation, and hardening roadmap.

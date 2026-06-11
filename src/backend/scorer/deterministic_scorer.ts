@@ -35,7 +35,7 @@ export class DeterministicScorer {
    * Returns score 0-100 and confidence 0.0-1.0
    */
   static score(context: ScoringContext): { score: number; level: RiskLevel; confidence: number } {
-    let score = 0;
+    const score = 0;
 
     // TODO: Implement scoring rules
     // Example rules (to be tuned based on evaluation):
@@ -104,7 +104,7 @@ export class DeterministicScorer {
   /**
    * Get human-readable explanation for score
    */
-  static explainScore(signals: SignalSet): string[] {
+  static explainScore(_signals: SignalSet): string[] {
     const explanations: string[] = [];
 
     // TODO: Generate explanations for each signal

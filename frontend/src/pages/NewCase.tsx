@@ -1,16 +1,18 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mail, Upload, Link2, ArrowRight, FileText, Loader2 } from 'lucide-react';
+import { Mail, Upload, Link2, ArrowRight, FileText, Loader2, Mic, RotateCcw } from 'lucide-react';
 import { SAMPLES } from '../lib/samples';
 import { useCase } from '../store/caseStore';
 import { uploadDocument } from '../lib/api';
+import { VoiceRecorder } from '../components/VoiceRecorder';
 
-type Tab = 'email' | 'upload' | 'link';
+type Tab = 'email' | 'upload' | 'link' | 'voice';
 
 const TABS: { id: Tab; label: string; icon: typeof Mail }[] = [
   { id: 'email', label: 'Paste email', icon: Mail },
   { id: 'upload', label: 'Upload', icon: Upload },
   { id: 'link', label: 'Link', icon: Link2 },
+  { id: 'voice', label: 'Tell us what happened', icon: Mic },
 ];
 
 export function NewCase() {
@@ -19,6 +21,7 @@ export function NewCase() {
   const [url, setUrl] = useState('');
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileNote, setFileNote] = useState<string | null>(null);
+  const [voiceMeta, setVoiceMeta] = useState<{ durationSec: number; locale: string } | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const { runAnalysis } = useCase();
@@ -27,7 +30,14 @@ export function NewCase() {
   function buildEvidence(): string {
     if (tab === 'email') return email.trim();
     if (tab === 'link') return url.trim() ? `Suspicious recruiter link: ${url.trim()}` : '';
-    return email.trim(); // upload writes extracted text into `email`
+    return email.trim(); // upload + voice write their text into `email`
+  }
+
+  // Voice transcript joins the SAME evidence channel as the paste/upload flows,
+  // so the user can edit it before analyzing and the pipeline stays unchanged.
+  function onTranscript(text: string, meta: { durationSec: number; locale: string }) {
+    setEmail(text);
+    setVoiceMeta(meta);
   }
 
   function submit() {
@@ -168,6 +178,46 @@ export function NewCase() {
               placeholder="https://careers-portal-example.net/apply"
               className="mt-1.5 w-full rounded-lg border border-line bg-ink-900 p-3 text-sm text-slate-100 placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
             />
+          </div>
+        )}
+
+        {tab === 'voice' && (
+          <div>
+            {voiceMeta ? (
+              <div>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-mono text-xs text-faint">
+                    Transcribed {voiceMeta.durationSec}s of audio · {voiceMeta.locale}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVoiceMeta(null);
+                      setEmail('');
+                    }}
+                    className="inline-flex items-center gap-1.5 text-xs text-muted transition hover:text-slate-100"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" strokeWidth={1.75} /> Re-record
+                  </button>
+                </div>
+                <textarea
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') submit();
+                  }}
+                  rows={9}
+                  aria-label="Transcript — edit before investigating"
+                  placeholder="Your transcribed account appears here. Edit it before investigating."
+                  className="w-full resize-y rounded-lg border border-line bg-ink-900 p-3.5 text-sm text-slate-100 placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+                />
+                <p className="mt-2 text-xs text-faint">
+                  Review and correct the transcript above, then investigate.
+                </p>
+              </div>
+            ) : (
+              <VoiceRecorder onTranscript={onTranscript} />
+            )}
           </div>
         )}
 
