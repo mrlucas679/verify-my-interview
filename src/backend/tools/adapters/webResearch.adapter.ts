@@ -14,7 +14,7 @@ export async function webResearchAdapter(input: {
     return {
       tool: 'research_company_web',
       success: false,
-      error: 'web research not configured (SERPAPI_API_KEY missing)',
+      error: 'web research not configured (no SERPAPI_API_KEY / NEWSAPI_API_KEY / GNEWS_API_KEY)',
       duration: Date.now() - start,
     };
   }
