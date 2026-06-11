@@ -95,6 +95,8 @@ export class AgentOrchestrator {
       companyName: entities.companies[0],
       emailAddress: entities.emails[0],
       domain: entities.domains[0],
+      phone: entities.phones[0],
+      senderIp: entities.sender_ip,
     };
     const ver = await staged(
       'verification',

@@ -37,7 +37,7 @@
     "title": "FTC Consumer Advice — Recognizing Phishing",
     "url": "https://consumer.ftc.gov/articles/how-recognize-and-avoid-phishing-scams",
     "excerpt": "Phishing emails often spoof a trusted organization while the real sender address, Reply-To, or links point somewhere else entirely. A message that fails sender authentication or routes replies to an unrelated mailbox should not be trusted.",
-    "signal_ids": ["reply_to_mismatch", "spf_fail", "dmarc_fail", "lookalike_domain", "freemail_corporate_claim"]
+    "signal_ids": ["reply_to_mismatch", "spf_fail", "dmarc_fail", "lookalike_domain", "freemail_corporate_claim", "proxy_hosting_sender_ip", "risky_tld_domain"]
   },
   {
     "id": "bbb_job_scam_study",
@@ -54,7 +54,12 @@
       "company_not_in_registry",
       "web_scam_warnings",
       "network_match",
-      "network_infrastructure_match"
+      "network_infrastructure_match",
+      "unofficial_application_channel",
+      "whatsapp_only_application",
+      "voip_recruiter_number",
+      "high_risk_phone",
+      "email_flagged_high_risk"
     ]
   }
 ]

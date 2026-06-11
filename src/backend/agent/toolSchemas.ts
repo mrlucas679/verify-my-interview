@@ -24,13 +24,21 @@ export const toolSchemas = [
   {
     name: 'lookup_domain_rdap',
     description:
-      'Lookup domain WHOIS data, DNS records, geolocation, and check if disposable email',
+      'Lookup domain WHOIS/registration age, DNS/MX records, disposable/free-mail and risky-TLD reputation, and (optionally) the owning company and originating-IP reputation.',
     inputSchema: {
       type: 'object',
       properties: {
         domain: {
           type: 'string',
           description: 'Domain name to verify (e.g., example.com)',
+        },
+        email: {
+          type: 'string',
+          description: 'A full email address on the domain — unlocks email-reputation enrichment',
+        },
+        senderIp: {
+          type: 'string',
+          description: "Originating IP from an email's Received: headers — unlocks IP intelligence",
         },
       },
       required: ['domain'],
@@ -63,6 +71,22 @@ export const toolSchemas = [
         domain: { type: 'string', description: "The recruiter's email/website domain, if known" },
       },
       required: ['company'],
+    },
+  },
+  {
+    name: 'lookup_phone_intel',
+    description:
+      "Check a recruiter's phone number for line type (mobile/landline/VOIP), carrier, disposable/abuse reputation, and risk level. Use when a job offer's only contact channel is a phone/WhatsApp number.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        phone: { type: 'string', description: 'Phone number in any format (local or +E.164)' },
+        country: {
+          type: 'string',
+          description: "ISO country code to resolve local formats; defaults to 'ZA' (South Africa)",
+        },
+      },
+      required: ['phone'],
     },
   },
 ];

@@ -19,6 +19,8 @@ export interface InvestigationInput {
   companyName?: string;
   domain?: string;
   emailAddress?: string;
+  phone?: string;
+  senderIp?: string;
 }
 
 const TOOL_SPECS: FunctionToolSpec[] = toolSchemas.map((schema) => ({
@@ -140,7 +142,11 @@ export class InvestigatorAgent {
     }
 
     if (entities.domain) {
-      const domainInput = { domain: entities.domain };
+      const domainInput = {
+        domain: entities.domain,
+        email: entities.email,
+        senderIp: input.senderIp,
+      };
       const result = await this.tools.execute('lookup_domain_rdap', domainInput);
       toolsUsed.push({ tool: 'lookup_domain_rdap', input: domainInput, result });
       if (result.success) {
@@ -152,6 +158,7 @@ export class InvestigatorAgent {
           signals.positive_signals.push(`Domain established (${age} days old)`);
         }
         if (result.data?.is_disposable) signals.red_flags.push('Disposable email domain');
+        if (result.data?.risky_tld) signals.red_flags.push('Domain on a risky TLD');
         if (result.data?.dns_records?.MX?.length > 0) {
           signals.positive_signals.push('Domain has MX records');
         } else {
@@ -159,6 +166,23 @@ export class InvestigatorAgent {
         }
       } else {
         signals.red_flags.push('Domain verification failed');
+      }
+    }
+
+    if (input.phone) {
+      const phoneInput = { phone: input.phone, country: 'ZA' };
+      const result = await this.tools.execute('lookup_phone_intel', phoneInput);
+      toolsUsed.push({ tool: 'lookup_phone_intel', input: phoneInput, result });
+      if (result.success) {
+        if (result.data?.is_voip) signals.red_flags.push('Recruiter number is a VOIP line');
+        if (result.data?.risk_level === 'high' || result.data?.is_abuse_detected) {
+          signals.red_flags.push('Recruiter number flagged high-risk / abusive');
+        }
+        reasoning.push(
+          `Phone intel: ${result.data?.line_type ?? 'unknown'} line, risk ${
+            result.data?.risk_level ?? 'n/a'
+          }`
+        );
       }
     }
 

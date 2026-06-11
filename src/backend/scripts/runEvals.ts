@@ -28,6 +28,15 @@ const SCRUBBED_ENV = [
   'ABSTRACT_API_KEY',
   'AZURE_DOCINT_ENDPOINT',
   'AZURE_DOCINT_KEY',
+  // External verification providers — scrubbed so offline evals never hit the
+  // network and stay byte-for-byte reproducible.
+  'WHOIS_LOOKUP_ENABLED',
+  'WHOISJSON_API_KEY',
+  'DOMSCAN_API_KEY',
+  'ABSTRACT_EMAIL_REPUTATION_KEY',
+  'ABSTRACT_PHONE_KEY',
+  'ABSTRACT_COMPANY_KEY',
+  'ABSTRACT_IP_KEY',
 ];
 
 export interface EvalCaseFile {

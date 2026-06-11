@@ -76,6 +76,11 @@ The reasoning agents must answer from real evidence, not training-data priors.
   research) is optional and reported by `GET /health`; the deterministic path is
   always available.
 - **[done]** PII redaction at the store/log boundary (`backend/privacy/redaction.ts`).
+- **[done]** **Data minimization at external-API ingestion** (POPIA s10): the
+  verification providers deliberately discard person-level fields the upstream
+  APIs return — a phone number's registered-owner name, an email's sender name —
+  so identities of third parties are never ingested, stored, or logged; only
+  line type / reputation / domain age reach the scorer.
 - **[next]** **AuthN/AuthZ + rate limiting** on all write/analyze endpoints;
   per-user quotas and tool budgets (tool-call caps already exist).
 - **[next]** **Observability.** App Insights + Log Analytics are already
@@ -94,6 +99,19 @@ The reasoning agents must answer from real evidence, not training-data priors.
   (brand vs aggregator/free-host/shortener apply channel — catches the
   template ring), `whatsapp_only_application`, and SA-locale fee/credential
   detection (rand "induction fee", ID/SARS/banking-proof asks).
+- **[done]** **Real external verification layer** (`backend/verification/providers.ts`,
+  key-gated so the offline pipeline is unchanged): real domain WHOIS/registration
+  age via who-dat (free) + whoisjson fallback; **Abstract Email Reputation**
+  (disposable/free-mail, MX, DMARC/SPF, **risky TLD**, domain age, address/domain
+  risk, breach count); **Abstract Phone Intelligence** as a first-class tool
+  (`lookup_phone_intel` — VOIP/line-type, disposable, abuse, risk) targeting the
+  WhatsApp-number scams; **Abstract IP Intelligence** on the email Received: IP
+  (proxy/Tor/hosting/abuse); Abstract Company Enrichment of the apply domain.
+  New data-driven signals: `risky_tld_domain`, `email_flagged_high_risk`,
+  `proxy_hosting_sender_ip`, `voip_recruiter_number`, `high_risk_phone`. These
+  turn the previously-heuristic domain checks into real findings and make the
+  long-dead `recently_registered_domain`/`established_domain` signals fire from
+  true registration dates.
 - **[next]** **Look-alike/brand-vs-official-domain** allow-list for the largest
   SA employers (Transnet, Eskom, SARS, Home Affairs, big retailers) so
   impersonation of a *specific* known brand scores higher than the generic

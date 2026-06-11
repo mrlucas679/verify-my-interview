@@ -3,6 +3,7 @@ import { companyLookupAdapter } from './adapters/companyLookup.adapter';
 import { domainLookupAdapter } from './adapters/domainLookup.adapter';
 import { scamPatternDetectorAdapter } from './adapters/scamPatternDetector.adapter';
 import { webResearchAdapter } from './adapters/webResearch.adapter';
+import { phoneIntelAdapter } from './adapters/phoneIntel.adapter';
 
 export class ToolOrchestrator {
   private cache: Map<string, { result: ToolResult; timestamp: number }> = new Map();
@@ -46,6 +47,9 @@ export class ToolOrchestrator {
           break;
         case 'research_company_web':
           result = await webResearchAdapter(input);
+          break;
+        case 'lookup_phone_intel':
+          result = await phoneIntelAdapter(input);
           break;
         default:
           result = {

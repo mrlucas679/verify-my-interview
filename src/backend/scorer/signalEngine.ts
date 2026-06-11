@@ -290,6 +290,78 @@ export function deriveSignals(
         evidence: { source: 'lookup_domain_rdap', detail: `${dom.domain} has ${mx.length} MX record(s)` },
       });
     }
+    // Real reputation verdicts (only present when email-reputation enrichment ran).
+    if (dom.risky_tld === true) {
+      signals.push({
+        id: 'risky_tld_domain',
+        label: 'Domain uses a high-risk TLD',
+        category: 'red',
+        points: 12,
+        evidence: { source: 'lookup_domain_rdap', detail: `${dom.domain} sits on a TLD associated with abuse` },
+      });
+    }
+    if (dom.address_risk === 'high' || dom.domain_risk === 'high') {
+      signals.push({
+        id: 'email_flagged_high_risk',
+        label: 'Recruiter email/domain flagged high-risk',
+        category: 'red',
+        points: 18,
+        evidence: {
+          source: 'lookup_domain_rdap',
+          detail: `Reputation provider rates ${dom.domain} high-risk (address=${dom.address_risk ?? 'n/a'}, domain=${dom.domain_risk ?? 'n/a'})`,
+        },
+      });
+    }
+    const ip = dom.ip_intel;
+    if (ip && (ip.isProxy || ip.isTor || ip.isHosting || ip.isAbuse)) {
+      const flags = [
+        ip.isProxy && 'proxy',
+        ip.isTor && 'Tor',
+        ip.isHosting && 'hosting/datacenter',
+        ip.isAbuse && 'known-abuse',
+      ].filter(Boolean);
+      signals.push({
+        id: 'proxy_hosting_sender_ip',
+        label: 'Email sent through an anonymizing / datacenter IP',
+        category: 'red',
+        points: 12,
+        evidence: {
+          source: 'lookup_domain_rdap',
+          detail: `Originating IP is ${flags.join(', ')} — atypical for a real employer's mail server`,
+        },
+      });
+    }
+  }
+
+  // --- Recruiter phone-number intelligence (Abstract Phone) ---------------
+  const phone = data('lookup_phone_intel');
+  if (phone) {
+    if (phone.is_voip === true) {
+      signals.push({
+        id: 'voip_recruiter_number',
+        label: 'Recruiter contact is a VOIP number',
+        category: 'red',
+        points: 10,
+        evidence: {
+          source: 'lookup_phone_intel',
+          detail: 'The only/primary contact number is a VOIP line — common for disposable scam contacts',
+        },
+      });
+    }
+    if (phone.risk_level === 'high' || phone.is_abuse_detected === true || phone.is_disposable === true) {
+      const why = [
+        phone.risk_level === 'high' && 'rated high-risk',
+        phone.is_abuse_detected && 'linked to reported abuse',
+        phone.is_disposable && 'a disposable number',
+      ].filter(Boolean);
+      signals.push({
+        id: 'high_risk_phone',
+        label: 'Recruiter phone number flagged',
+        category: 'red',
+        points: 18,
+        evidence: { source: 'lookup_phone_intel', detail: `Phone-intelligence: ${why.join(', ')}` },
+      });
+    }
   }
 
   // --- Company registry signals ------------------------------------------

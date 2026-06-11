@@ -6,15 +6,24 @@ const domainService = new DomainVerificationService();
 function calculateDaysSince(dateStr?: string): number | null {
   if (!dateStr) return null;
   const created = new Date(dateStr);
+  if (Number.isNaN(created.getTime())) return null;
   const now = new Date();
   return Math.floor((now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-export async function domainLookupAdapter(input: { domain: string }): Promise<ToolResult> {
+export async function domainLookupAdapter(input: {
+  domain: string;
+  email?: string;
+  senderIp?: string;
+}): Promise<ToolResult> {
   const startTime = Date.now();
 
   try {
-    const result = await domainService.checkDomainHealth(input.domain);
+    const result = await domainService.checkDomainHealth({
+      domain: input.domain,
+      email: input.email,
+      senderIp: input.senderIp,
+    });
 
     if (result.error) {
       return {
@@ -24,6 +33,10 @@ export async function domainLookupAdapter(input: { domain: string }): Promise<To
         duration: Date.now() - startTime,
       };
     }
+
+    // Prefer WHOIS creation date; fall back to the reputation provider's domain age.
+    const whoisAge = calculateDaysSince(result.whois?.created);
+    const ageDays = whoisAge ?? result.emailRep?.domainAgeDays ?? null;
 
     return {
       tool: 'lookup_domain_rdap',
@@ -35,10 +48,22 @@ export async function domainLookupAdapter(input: { domain: string }): Promise<To
           created_date: result.whois?.created,
           expiry_date: result.whois?.expiry,
           registrar: result.whois?.registrar,
-          age_days: calculateDaysSince(result.whois?.created),
+          age_days: ageDays,
         },
-        geolocation: result.geolocation || null,
         is_disposable: result.disposable || false,
+        is_free_email: result.isFree ?? null,
+        risky_tld: result.riskyTld ?? null,
+        // Email-reputation risk verdicts (null when unconfigured).
+        address_risk: result.emailRep?.addressRisk ?? null,
+        domain_risk: result.emailRep?.domainRisk ?? null,
+        dmarc_enforced: result.emailRep?.isDmarcEnforced ?? null,
+        spf_strict: result.emailRep?.isSpfStrict ?? null,
+        breaches: result.emailRep?.totalBreaches ?? null,
+        // Company that owns the (application) domain, when enrichment is on.
+        org_name: result.company?.companyName ?? null,
+        org_founded: result.company?.yearFounded ?? null,
+        // Originating-IP intelligence (email Received: header), when available.
+        ip_intel: result.ipIntel ?? null,
         cached: result.cached || false,
       },
       duration: Date.now() - startTime,
