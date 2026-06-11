@@ -73,8 +73,26 @@ The reasoning agents must answer from real evidence, not training-data priors.
 ## 4. System design & operations
 
 - **[done]** Graceful degradation: every subsystem (Foundry, Search, OCR, web
-  research) is optional and reported by `GET /health`; the deterministic path is
-  always available.
+  research, **voice transcription**) is optional and reported by `GET /health`;
+  the deterministic path is always available.
+- **[done]** **Voice Investigation intake** (`backend/speech/speechToText.ts`,
+  `POST /transcribe`): Azure AI Speech Fast Transcription, **key-gated** on
+  `AZURE_SPEECH_REGION` + `AZURE_SPEECH_KEY` (candidate locales via
+  `AZURE_SPEECH_LOCALES`, default `en-ZA,en-US,en-GB`) so the offline pipeline is
+  unchanged. Hardened like every other intake: 6/min/IP rate limit, 25 MB cap,
+  magic-byte audio sniffing (`sniffAudioType` — WAV/MP3/M4A/OGG/FLAC/WebM/AMR),
+  `503` when unconfigured (reported as `capabilities.voice_transcription`),
+  `422` when no speech is recognised. **No raw audio is retained** (POPIA s10):
+  the buffer is processed in memory and discarded; only the redacted transcript
+  persists, through the same boundary as typed text. Design:
+  [`docs/VOICE_INVESTIGATION_DESIGN.md`](VOICE_INVESTIGATION_DESIGN.md).
+- **[next]** **Voice eval determinism & TTS** — add `AZURE_SPEECH_*` to
+  `SCRUBBED_ENV` (`backend/scripts/runEvals.ts`) plus a synthetic voice-narration
+  fixture so the voice channel is proven through `/analyze` without ever calling
+  Azure (`CLAUDE.md` §3); evaluate **Azure Neural TTS** for SA-accented report
+  read-back (today it is on-device `speechSynthesis`) against the cross-border
+  data-residency questions in `docs/PRIVACY.md` §8. Opt-in **audio retention**
+  for re-analysis stays gated behind consent UX + a retention schedule.
 - **[done]** PII redaction at the store/log boundary (`backend/privacy/redaction.ts`).
 - **[done]** **Data minimization at external-API ingestion** (POPIA s10): the
   verification providers deliberately discard person-level fields the upstream

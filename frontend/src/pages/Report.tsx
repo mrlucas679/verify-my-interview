@@ -1,7 +1,7 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, AlertTriangle, ListChecks, Cpu, Loader2 } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, ListChecks, Cpu, Loader2, Volume2, Square } from 'lucide-react';
 import { Link as RouterLink } from 'react-router-dom';
 import { useCase } from '../store/caseStore';
 import { VerdictCard } from '../components/VerdictCard';
@@ -11,7 +11,7 @@ import { NetworkMatches } from '../components/NetworkMatches';
 import { ChatPanel } from '../components/ChatPanel';
 import { EvidenceGraph } from '../components/EvidenceGraph';
 import { GuidanceCitations } from '../components/GuidanceCitations';
-import type { PipelineTrace } from '../lib/types';
+import type { PipelineTrace, RiskReport } from '../lib/types';
 
 const STEPS = [
   'Evidence Agent: classifying input, parsing headers',
@@ -34,6 +34,72 @@ function EngineBadge({ mode }: { mode: PipelineTrace['engine_mode'] }) {
       <Cpu className="h-3.5 w-3.5" />
       {m.label}
     </span>
+  );
+}
+
+// Reads the verdict + summary + top red flags aloud via the browser's
+// SpeechSynthesis API. No network, no new deps; cancels on unmount/stop.
+function ListenButton({ report }: { report: RiskReport }) {
+  const supported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+  const [speaking, setSpeaking] = useState(false);
+
+  const buildScript = useCallback((): string => {
+    const flags = report.red_flags.slice(0, 4);
+    const flagLine =
+      flags.length > 0
+        ? `Top red flags: ${flags.join('. ')}.`
+        : 'No specific red flags were raised.';
+    return [`Verdict: ${report.risk_level}.`, report.case_summary, flagLine]
+      .filter(Boolean)
+      .join(' ');
+  }, [report]);
+
+  const stop = useCallback(() => {
+    if (supported) window.speechSynthesis.cancel();
+    setSpeaking(false);
+  }, [supported]);
+
+  // Stop any in-flight narration when the report changes or the page unmounts.
+  useEffect(() => {
+    return () => {
+      if (supported) window.speechSynthesis.cancel();
+    };
+  }, [supported]);
+
+  if (!supported) return null;
+
+  function toggle() {
+    if (speaking) {
+      stop();
+      return;
+    }
+    window.speechSynthesis.cancel(); // clear any queued utterance first
+    const utterance = new SpeechSynthesisUtterance(buildScript());
+    utterance.rate = 1;
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    window.speechSynthesis.speak(utterance);
+    setSpeaking(true);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label={speaking ? 'Stop reading the report aloud' : 'Listen to the report'}
+      aria-pressed={speaking}
+      className="inline-flex items-center gap-1.5 rounded-md border border-line bg-ink-800 px-2.5 py-1 text-xs text-muted transition hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+    >
+      {speaking ? (
+        <>
+          <Square className="h-3.5 w-3.5" strokeWidth={1.75} /> Stop
+        </>
+      ) : (
+        <>
+          <Volume2 className="h-3.5 w-3.5" strokeWidth={1.75} /> Listen
+        </>
+      )}
+    </button>
   );
 }
 
@@ -102,11 +168,14 @@ export function Report() {
 
       {result && !loading && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-7">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <h1 className="font-display text-2xl font-semibold tracking-tight text-white">
               Investigation report
             </h1>
-            <EngineBadge mode={result.trace.engine_mode} />
+            <div className="flex items-center gap-2.5">
+              <ListenButton report={result.report} />
+              <EngineBadge mode={result.trace.engine_mode} />
+            </div>
           </div>
 
           <VerdictCard report={result.report} />

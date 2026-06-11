@@ -6,6 +6,17 @@ import { motion } from 'framer-motion';
 import { BookOpenCheck, ExternalLink } from 'lucide-react';
 import type { GuidanceCitation } from '../lib/types';
 
+/** Defense-in-depth: only allow http(s) links to become a real href (blocks
+ *  javascript:/data: even if a malformed citation ever reaches the client). */
+function safeHref(url: string): string | undefined {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function GuidanceCitations({ citations }: { citations: GuidanceCitation[] }) {
   if (!citations.length) return null;
 
@@ -14,7 +25,7 @@ export function GuidanceCitations({ citations }: { citations: GuidanceCitation[]
       {citations.map((c, i) => (
         <motion.a
           key={c.url}
-          href={c.url}
+          href={safeHref(c.url)}
           target="_blank"
           rel="noopener noreferrer"
           initial={{ opacity: 0, y: 6 }}

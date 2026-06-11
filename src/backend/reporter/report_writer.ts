@@ -62,7 +62,7 @@ export class ReportWriter {
   /**
    * Generate recommended next steps based on risk level
    */
-  private static generateNextSteps(level: string, entities: Entities, redFlags: string[]): string[] {
+  private static generateNextSteps(level: string, entities: Entities, _redFlags: string[]): string[] {
     const steps: string[] = [];
 
     if (level === 'Likely Scam' || level === 'Suspicious') {

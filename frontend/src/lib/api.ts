@@ -46,6 +46,26 @@ export async function uploadDocument(
   return res.json();
 }
 
+export async function transcribeAudio(
+  blob: Blob,
+  fileName = 'recording.webm'
+): Promise<{ text: string; durationSec: number; locale: string }> {
+  const fd = new FormData();
+  fd.append('audio', blob, fileName);
+  const res = await fetch('/transcribe', { method: 'POST', body: fd });
+  if (!res.ok) {
+    let detail = `Transcription failed (${res.status})`;
+    try {
+      const b = await res.json();
+      if (b?.error) detail = b.error;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 export async function fetchNetworkGraph(): Promise<EntityGraph> {
   const res = await fetch('/network/graph');
   if (!res.ok) throw new Error(`Failed to load network graph (${res.status})`);

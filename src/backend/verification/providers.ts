@@ -20,6 +20,11 @@ function get<T = any>(url: string, params: Record<string, unknown>, headers?: Re
   return axios.get<T>(url, { params, headers, timeout: TIMEOUT_MS });
 }
 
+/** Output validation: provider payloads are untrusted — keep strings strings, capped. */
+function capStr(v: unknown, max = 120): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v.slice(0, max) : undefined;
+}
+
 // ── Domain WHOIS / RDAP ─────────────────────────────────────────────────────
 
 export interface WhoisInfo {
@@ -50,7 +55,7 @@ export async function whoisLookup(domain: string): Promise<WhoisInfo | null> {
       return {
         created: data.dates?.created ?? undefined,
         expires: data.dates?.expires ?? undefined,
-        registrar: data.registrar?.name ?? undefined,
+        registrar: capStr(data.registrar?.name),
         isRegistered: data.isRegistered,
         source: 'who-dat',
       };
@@ -71,7 +76,7 @@ export async function whoisLookup(domain: string): Promise<WhoisInfo | null> {
       const raw: string = typeof data?.data === 'string' ? data.data : JSON.stringify(data ?? {});
       const created = raw.match(/Creation Date:\s*([0-9T:\-Z.]+)/i)?.[1];
       const expires = raw.match(/(?:Registry Expiry Date|Expiration Date):\s*([0-9T:\-Z.]+)/i)?.[1];
-      const registrar = raw.match(/Registrar:\s*(.+)/i)?.[1]?.trim();
+      const registrar = capStr(raw.match(/Registrar:\s*(.+)/i)?.[1]?.trim());
       if (created || registrar) {
         return { created, expires, registrar, isRegistered: true, source: 'whoisjson' };
       }
@@ -172,8 +177,8 @@ export async function phoneIntelligence(phone: string, country = 'ZA'): Promise<
       isValid: data.phone_validation?.is_valid ?? undefined,
       lineType: carrier.line_type ?? undefined,
       isVoip: data.phone_validation?.is_voip ?? carrier.line_type === 'voip',
-      carrier: carrier.name ?? undefined,
-      country: data.phone_location?.country_name ?? undefined,
+      carrier: capStr(carrier.name),
+      country: capStr(data.phone_location?.country_name, 60),
       riskLevel: risk.risk_level ?? undefined,
       isDisposable: risk.is_disposable ?? undefined,
       isAbuseDetected: risk.is_abuse_detected ?? undefined,
@@ -212,12 +217,12 @@ export async function companyEnrichment(domain: string): Promise<CompanyEnrichme
     if (!data) return null;
     return {
       found: Boolean(data.company_name),
-      companyName: data.company_name ?? undefined,
+      companyName: capStr(data.company_name),
       yearFounded: data.year_founded ?? undefined,
-      country: data.country ?? undefined,
+      country: capStr(data.country, 60),
       employeeCount: data.employee_count ?? undefined,
       type: data.type ?? undefined,
-      industry: data.industry ?? undefined,
+      industry: capStr(data.industry),
     };
   } catch {
     return null;
@@ -256,8 +261,8 @@ export async function ipIntelligence(ip: string): Promise<IpIntel | null> {
       isTor: data.security.is_tor ?? undefined,
       isHosting: data.security.is_hosting ?? undefined,
       isAbuse: data.security.is_abuse ?? undefined,
-      country: data.location?.country ?? undefined,
-      asnName: data.asn?.name ?? undefined,
+      country: capStr(data.location?.country, 60),
+      asnName: capStr(data.asn?.name),
     };
   } catch {
     return null;

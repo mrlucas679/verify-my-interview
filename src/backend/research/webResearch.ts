@@ -8,11 +8,24 @@
 // is configured.
 
 import axios from 'axios';
+import { sanitizeHttpUrl } from '../http/guard';
 
 export function webResearchEnabled(): boolean {
   return Boolean(
     process.env.SERPAPI_API_KEY || process.env.NEWSAPI_API_KEY || process.env.GNEWS_API_KEY
   );
+}
+
+/** Output validation: external search/news payloads are untrusted. Only
+ *  http(s) links survive (no javascript:/data: schemes), and titles/snippets
+ *  are length-capped before they reach reports the UI renders. */
+function cleanResult(r: { title?: any; link?: any; snippet?: any; source?: string }): ResearchResult {
+  return {
+    title: typeof r.title === 'string' ? r.title.slice(0, 200) : '',
+    link: sanitizeHttpUrl(r.link),
+    snippet: typeof r.snippet === 'string' ? r.snippet.slice(0, 300) : '',
+    source: r.source,
+  };
 }
 
 export interface ResearchResult {
@@ -41,12 +54,9 @@ async function serp(query: string, key: string): Promise<ResearchResult[]> {
       params: { engine: 'google', q: query, api_key: key, num: 5 },
       timeout: 15000,
     });
-    return (res.data.organic_results || []).slice(0, 5).map((o: any) => ({
-      title: o.title || '',
-      link: o.link || '',
-      snippet: o.snippet || '',
-      source: 'google',
-    }));
+    return (res.data.organic_results || []).slice(0, 5).map((o: any) =>
+      cleanResult({ title: o.title, link: o.link, snippet: o.snippet, source: 'google' })
+    );
   } catch (e) {
     console.error('[serp] query failed:', e instanceof Error ? e.message : e);
     return [];
@@ -62,12 +72,9 @@ async function newsApi(query: string, key: string): Promise<ResearchResult[]> {
       headers: { 'X-Api-Key': key },
       timeout: 12000,
     });
-    return (res.data.articles || []).slice(0, 5).map((a: any) => ({
-      title: a.title || '',
-      link: a.url || '',
-      snippet: a.description || '',
-      source: 'newsapi',
-    }));
+    return (res.data.articles || []).slice(0, 5).map((a: any) =>
+      cleanResult({ title: a.title, link: a.url, snippet: a.description, source: 'newsapi' })
+    );
   } catch (e) {
     console.error('[newsapi] query failed:', e instanceof Error ? e.message : e);
     return [];
@@ -80,12 +87,9 @@ async function gnews(query: string, key: string): Promise<ResearchResult[]> {
       params: { q: query, lang: 'en', max: 5, apikey: key },
       timeout: 12000,
     });
-    return (res.data.articles || []).slice(0, 5).map((a: any) => ({
-      title: a.title || '',
-      link: a.url || '',
-      snippet: a.description || '',
-      source: 'gnews',
-    }));
+    return (res.data.articles || []).slice(0, 5).map((a: any) =>
+      cleanResult({ title: a.title, link: a.url, snippet: a.description, source: 'gnews' })
+    );
   } catch (e) {
     console.error('[gnews] query failed:', e instanceof Error ? e.message : e);
     return [];
@@ -116,7 +120,7 @@ function isOfficialListing(link: string, company: string, domain?: string): bool
   try {
     const host = new URL(link).hostname.toLowerCase();
     const token = company.toLowerCase().split(/\s+/)[0];
-    if (domain && host.includes(domain.toLowerCase())) return /careers|jobs|/.test(link);
+    if (domain && host.includes(domain.toLowerCase())) return /careers|jobs/i.test(link);
     const onJobBoard = /(linkedin|indeed|glassdoor|greenhouse|lever|workday)\./.test(host);
     return (host.includes(token) && /careers|jobs/.test(link)) || (onJobBoard && /careers|jobs|company/.test(link));
   } catch {
