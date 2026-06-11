@@ -119,8 +119,13 @@ export class ReporterAgent {
         return `This opportunity has several warning signs${
           topRed ? ` such as ${topRed}` : ''
         }. Verify independently before sharing any information or money.`;
-      case 'Needs More Verification':
+      case 'Needs More Verification': {
+        const resembles = signals.red_flags.find((f) => f.startsWith('Resembles'));
+        if (resembles) {
+          return `The wording of this message closely matches previously reported scams (${resembles.toLowerCase()}), but it contains too little verifiable detail — no company, email, or link — to confirm. Treat it with suspicion and add the recruiter's email address, company name, or any links so the investigation can verify them.`;
+        }
         return `There are some concerns but not enough verified evidence to conclude. Gather more details and re-check before proceeding.`;
+      }
       case 'Low Risk':
         return `No significant red flags were found, but continue normal hiring-process caution and verify details on official channels.`;
       default:

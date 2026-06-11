@@ -97,11 +97,15 @@ export class NetworkAgent {
     if (!linked.length && strongSemantic.length) {
       const top = strongSemantic[0];
       const hard = top.reasons.some((r) => HARD_REASON.test(r));
+      // Independent matches corroborate each other: scale points with the
+      // match count (capped) so 4 known-scam lookalikes never read "Low Risk".
+      const base = hard ? 20 : 12;
+      const points = Math.min(hard ? 30 : 26, base + 4 * (strongSemantic.length - 1));
       signals.push({
         id: 'network_match',
         label: `Resembles ${strongSemantic.length} prior reported scam${strongSemantic.length > 1 ? 's' : ''}`,
         category: 'red',
-        points: hard ? 20 : 12,
+        points,
         evidence: {
           source: 'scam_network',
           detail: `${top.reportId} (${top.scamType}) — ${top.reasons[0]}`,

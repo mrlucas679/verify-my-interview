@@ -41,8 +41,11 @@ with all verification gates green, before the 2026-06-14 submission. DONE.
 | Orchestrator skill + skill packs + CLAUDE.md | orchestrator | DONE | .claude/skills/{multi-agent-opus-orchestrator,impeccable-design,threejs,deep-research}, CLAUDE.md |
 
 ## Assumptions / accepted residual risks
-- A2 (OPEN, verify in live rehearsal): MediaRecorder webm/opus acceptance by
-  Azure Fast Transcription is documented but UNTESTED here (no live key yet).
+- A2 (PARTIALLY CLOSED 2026-06-11): Azure Fast Transcription verified LIVE —
+  WAV in, correct transcript out, en-ZA locale auto-selected, response shape
+  (combinedPhrases/durationMilliseconds/phrases[].locale) matches the code,
+  AIServices multi-service key works (region eastus2). Localized "R950"
+  correctly. Still to confirm in a browser: MediaRecorder webm/opus input.
 - AR1 (accepted): `ftyp` sniff overlap (m4a vs heic across the two sniffers)
   is benign — wrong route just yields a clean provider error.
 - AR2 (accepted): dependency major-bumps (tsx 4, typescript-eslint 7) rode

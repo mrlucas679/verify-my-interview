@@ -12,6 +12,7 @@ import { Entities } from '../../types/entities';
 import { ToolOrchestrator } from '../tools';
 import { FoundryRunner, getFoundrySettings } from './foundryRunner';
 import { AgentEngine, AgentToolCall } from './types';
+import { summarizeToolResult } from './humanize';
 import { EvidenceAgent } from './agents/evidenceAgent';
 import { InvestigatorAgent, InvestigationInput } from './agents/investigatorAgent';
 import { ResearchAgent } from './agents/researchAgent';
@@ -109,7 +110,8 @@ export class AgentOrchestrator {
           .slice(0, 6)
           .map((t) => ({
             claim: `Verified via ${t.tool}`,
-            evidence: JSON.stringify(t.result.data ?? {}).slice(0, 160),
+            // Plain English for the report; raw JSON stays in the dev trace.
+            evidence: summarizeToolResult(t.tool, t.result.data).slice(0, 220),
             confidence: 0.85,
             source: t.tool,
           })),

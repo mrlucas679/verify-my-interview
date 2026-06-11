@@ -26,7 +26,13 @@ export function scoreStructuredSignals(
     0,
     Math.min(1, 0.25 + toolCoverage * 0.45 + Math.min(signals.length, 6) * 0.05)
   );
-  return { score, level: levelFromScore(score, confidence), confidence };
+  let level = levelFromScore(score, confidence);
+  // Floor rule: wording that matches the scam-intelligence network must never
+  // be presented as "Low Risk" — sparse evidence is inconclusive, not safe.
+  if (level === 'Low Risk' && signals.some((s) => s.id === 'network_match')) {
+    level = 'Needs More Verification';
+  }
+  return { score, level, confidence };
 }
 
 export class DeterministicScorer {
