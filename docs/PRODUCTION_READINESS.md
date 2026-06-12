@@ -10,6 +10,25 @@ The guiding principle is already in the architecture and must not regress:
 claim cites a source.** Hardening makes that pipeline grounded, safe, measured,
 and operable — it does not move scoring into the model.
 
+## Submission status (2026-06-12)
+
+All verification gates green at HEAD: backend+frontend build, eslint 0/0,
+frontend `tsc --noEmit` clean, jest **24/24**, offline evals **12/12**
+(deterministic), secret scan of the tracked tree clean, root `npm audit`
+**0 vulnerabilities**. UI is the final two-page IA (verify slot → layered
+investigation dossier) with an app-level error boundary.
+
+Accepted, documented residual risks:
+- Frontend `npm audit`: 2 moderate advisories in **esbuild/vite** — both
+  affect the *dev server only* (dev request exposure; optimized-deps `.map`
+  path traversal). Production serves Vite's static build output from Express;
+  the dev server never runs in production. Fixing requires a Vite major bump —
+  deferred past submission.
+- Live-run items tracked in `.claude/orchestrator/PROJECT_STATE.md`: seed the
+  `scam-reports-v2` index once, restart shell so `DefaultAzureCredential`
+  finds `az`, browser check of MediaRecorder webm/opus against Fast
+  Transcription (WAV path verified live).
+
 ---
 
 ## 1. Grounding the model (accuracy + traceability)

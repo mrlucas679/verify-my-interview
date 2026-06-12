@@ -114,17 +114,20 @@ Higgsfield MCP (AI video/image generation — demo-video assets); GitHub via
 **Hooks (guardrails):** configured in `.claude/settings.json` if present —
 they intercept tool calls; treat hook output as user feedback, don't fight it.
 
-## Current state (2026-06-11)
+## Current state (2026-06-12)
 
-Shipped: 6-agent pipeline, entity graph + seeded ring, Sentinel UI, guidance
-citations, PII redaction (now applied at the `/analyze` boundary for ALL
-evidence channels), real external verification (WHOIS/Abstract/news), HTTP
-hardening (rate limits/validation/CSP/audit log), full Voice Investigation
-(record/upload → `/transcribe` Azure Speech → editable transcript → pipeline;
-report read-back via browser TTS), voice design doc. Gates: lint 0/0,
-jest 21/21, evals 11/11, npm audit 0.
-Open: live Azure rehearsal (incl. AZURE_SPEECH_* keys + webm/opus check),
-demo video, submission packaging.
+Shipped: 6-agent pipeline, entity graph + seeded ring, guidance citations,
+PII redaction at the `/analyze` boundary for ALL evidence channels, real
+external verification (WHOIS/Abstract/news), HTTP hardening, full Voice
+Investigation (Azure Speech verified LIVE, en-ZA), reply-bait smishing signal,
+semantic-match scaling + inconclusive floor, humanized findings, and the FINAL
+two-page UI: `/` verify slot (3D layer-stack hero, live entity chips,
+drag-drop) → `/report` stacked investigation dossier (sticky verdict bar,
+error boundary). Gates: lint 0/0, jest 24/24, evals 12/12, root audit 0,
+secret scan clean. Frontend dev-only esbuild/vite advisories accepted (see
+PRODUCTION_READINESS §Submission status).
+Open: user-run `npm run seed:network` (v2 index), fresh-terminal `npm start`
+(Foundry creds), browser webm/opus check, demo video, submission packaging.
 
 Orchestration state lives in `.claude/orchestrator/PROJECT_STATE.md`
 (decisions D1–D4, requirements coverage, risks) — read it before resuming work.
