@@ -1,4 +1,4 @@
-import type { AnalyzeResponse, EntityGraph, NetworkStats } from './types';
+import type { AnalyzeResponse } from './types';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -63,18 +63,6 @@ export async function transcribeAudio(
     }
     throw new Error(detail);
   }
-  return res.json();
-}
-
-export async function fetchNetworkGraph(): Promise<EntityGraph> {
-  const res = await fetch('/network/graph');
-  if (!res.ok) throw new Error(`Failed to load network graph (${res.status})`);
-  return res.json();
-}
-
-export async function fetchNetworkStats(): Promise<NetworkStats> {
-  const res = await fetch('/network/stats');
-  if (!res.ok) throw new Error(`Failed to load network stats (${res.status})`);
   return res.json();
 }
 
