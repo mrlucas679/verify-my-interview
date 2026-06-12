@@ -14,6 +14,17 @@ export function speechEnabled(): boolean {
   return Boolean(process.env.AZURE_SPEECH_KEY && process.env.AZURE_SPEECH_REGION);
 }
 
+/** Transcription failure carrying the HTTP status the CLIENT should receive. */
+export class TranscriptionError extends Error {
+  constructor(
+    message: string,
+    public readonly clientStatus: number
+  ) {
+    super(message);
+    this.name = 'TranscriptionError';
+  }
+}
+
 export interface Transcription {
   text: string;
   durationSec: number;
@@ -56,15 +67,46 @@ export async function transcribeAudio(
     enc(`\r\n--${boundary}--\r\n`),
   ]);
 
-  const res = await axios.post(url, body, {
-    headers: {
-      'Ocp-Apim-Subscription-Key': key,
-      'Content-Type': `multipart/form-data; boundary=${boundary}`,
-    },
-    timeout: 120000,
-    maxBodyLength: Infinity,
-    maxContentLength: Infinity,
-  });
+  let res;
+  try {
+    res = await axios.post(url, body, {
+      headers: {
+        'Ocp-Apim-Subscription-Key': key,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      },
+      timeout: 120000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+    });
+  } catch (e) {
+    // Map the provider failure to an actionable client status. Log status +
+    // Azure error code only — never audio content (POPIA content-free logs).
+    if (axios.isAxiosError(e) && e.response) {
+      const status = e.response.status;
+      const code = (e.response.data as { error?: { code?: string } } | undefined)?.error?.code;
+      console.error(`[speech] Azure transcription failed: HTTP ${status}${code ? ` (${code})` : ''}`);
+      if (status === 400) {
+        throw new TranscriptionError(
+          'The transcription service could not decode this audio. Re-record in the browser, or upload a WAV, MP3, or M4A file.',
+          415
+        );
+      }
+      if (status === 401 || status === 403) {
+        throw new TranscriptionError(
+          'Voice transcription is not configured correctly on this server.',
+          503
+        );
+      }
+      if (status === 429) {
+        throw new TranscriptionError(
+          'The transcription service is busy — try again in a minute.',
+          503
+        );
+      }
+    }
+    console.error('[speech] Azure transcription transport error');
+    throw new TranscriptionError('Transcription failed — try again.', 500);
+  }
 
   const data = res.data || {};
   // Prefer the combined phrases; fall back to concatenating per-phrase text.

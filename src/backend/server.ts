@@ -11,7 +11,7 @@ import { randomUUID, randomBytes } from 'crypto';
 import express, { Request, Response } from 'express';
 import multer from 'multer';
 import { ocrEnabled, extractText } from './ocr/documentIntelligence';
-import { speechEnabled, transcribeAudio } from './speech/speechToText';
+import { speechEnabled, transcribeAudio, TranscriptionError } from './speech/speechToText';
 import { AgentOrchestrator } from './agent/orchestrator';
 import { scamNetwork } from './network/scamNetwork';
 import { entityGraph } from './network/entityGraph';
@@ -145,6 +145,9 @@ app.post(
       }
       res.json({ text, durationSec, locale });
     } catch (error) {
+      if (error instanceof TranscriptionError) {
+        return res.status(error.clientStatus).json({ error: error.message });
+      }
       console.error('Transcription error:', error);
       res.status(500).json({ error: 'Transcription failed' });
     }
@@ -416,8 +419,13 @@ app.get('/docs', (req: Request, res: Response) => {
   });
 });
 
-// SPA fallback: serve the built React app for any non-API GET route
+// SPA fallback: serve the built React app for any non-API GET route.
+// Missing hashed assets must 404 (a stale cached index.html would otherwise
+// receive HTML where it expects CSS/JS and break with a MIME error).
 app.get('*', (req: Request, res: Response) => {
+  if (req.path.startsWith('/assets/')) {
+    return res.status(404).json({ error: 'Asset not found — reload the page (Ctrl+Shift+R).' });
+  }
   res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
 });
 
