@@ -32,6 +32,14 @@
     "signal_ids": ["upfront_payment_request", "network_infrastructure_match"]
   },
   {
+    "id": "ftc_spam_texts",
+    "source": "FTC",
+    "title": "FTC Consumer Advice — How to Recognize and Report Spam Text Messages",
+    "url": "https://consumer.ftc.gov/articles/how-recognize-and-report-spam-text-messages",
+    "excerpt": "Scammers send texts with offers and prompts designed to get a response. Replying — even to say STOP or YES — tells the sender your number is active and invites more scam messages. Do not reply; report and block the sender instead.",
+    "signal_ids": ["sms_reply_bait"]
+  },
+  {
     "id": "ftc_phishing",
     "source": "FTC",
     "title": "FTC Consumer Advice — Recognizing Phishing",

@@ -1,0 +1,11 @@
+{
+  "name": "SA SMS reply-bait - stage-one smishing with no entities",
+  "evidence": "Your CV has been shortlisted for an admin position at a top retailer, R8500 per month. Reply YES to secure your interview slot.",
+  "expected_risk_level": "Needs More Verification",
+  "expected_score_range": [15, 40],
+  "missing_evidence": [
+    "No company domain or recruiter email",
+    "No link — the reply itself is the hook"
+  ],
+  "recommended_action": "Do not reply (even YES/STOP confirms a live number); report and block the sender"
+}

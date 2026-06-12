@@ -517,6 +517,31 @@ export function deriveSignals(
     }
   }
 
+  // --- SMS reply-bait (smishing stage one) ---------------------------------
+  // A short job-offer text that asks the victim to reply ("reply YES", "type
+  // YES") carries no links or entities on purpose: the reply confirms a live,
+  // engaged number and triggers the real scam in a follow-up message. The
+  // absence of verifiable detail is the design, so it must score on its own.
+  const replyBait =
+    evidence.length < 320 &&
+    /\b(job|interview|position|role|hiring|recruit|salary|offer|vacancy|earn|cv)\b/i.test(text) &&
+    /\b(reply|respond|text|type|send)\b[^.!?\n]{0,24}\b(yes|interested|confirm|start)\b/i.test(
+      text
+    );
+  if (replyBait) {
+    signals.push({
+      id: 'sms_reply_bait',
+      label: 'Reply-bait SMS pattern',
+      category: 'red',
+      points: 18,
+      evidence: {
+        source: 'detect_scam_patterns',
+        detail:
+          'Short job text asks you to reply (e.g. "reply YES") — replying confirms your number is active and triggers the follow-up scam message',
+      },
+    });
+  }
+
   // --- WhatsApp / personal-number-only application ------------------------
   // No email, no website — apply only via a personal mobile / WhatsApp. Common
   // to informal hiring, so it only nudges; it compounds with fee/credential cues.
