@@ -143,89 +143,82 @@ function LayerBlock({
   layer,
   trace,
   index,
-  isLast,
 }: {
   layer: InvestigationLayer;
   trace: PipelineTrace;
   index: number;
-  isLast: boolean;
 }) {
   const reduceMotion = useReducedMotion();
   const Icon = LAYER_ICON[layer.id];
-  const dotColor = layer.active ? 'border-accent bg-ink-850' : 'border-line bg-ink-850';
 
+  // The dossier effect: each layer card overlaps the one before it, so the
+  // investigation literally reads as evidence stacked into a verdict.
   return (
-    <motion.div
+    <motion.article
       {...(reduceMotion
         ? {}
         : {
-            initial: { opacity: 0, y: 8 },
-            animate: { opacity: 1, y: 0 },
-            transition: { duration: 0.22, ease: 'easeOut' as const, delay: index * 0.06 },
+            initial: { opacity: 0, y: 18 },
+            whileInView: { opacity: 1, y: 0 },
+            viewport: { once: true, margin: '-40px' },
+            transition: { duration: 0.26, ease: 'easeOut' as const },
           })}
-      className="relative pl-12"
+      style={{ zIndex: index + 1 }}
+      className={`surface relative p-4 transition-transform duration-200 ease-out hover:-translate-y-0.5 sm:p-5 ${
+        index > 0 ? '-mt-3' : ''
+      } ${layer.active ? '' : 'opacity-90'}`}
     >
-      {/* Connected rail: line down from this dot to the next layer */}
-      {!isLast && (
-        <span
-          aria-hidden="true"
-          className="absolute left-[15px] top-8 bottom-[-18px] w-px bg-line"
-        />
-      )}
-      {/* Dot */}
+      {/* Layer index tab — the "page number" of the dossier */}
       <span
         aria-hidden="true"
-        className={`absolute left-0 top-1 grid h-8 w-8 place-items-center rounded-full border ${dotColor}`}
+        className="absolute right-4 top-4 font-mono text-[10px] uppercase tracking-[0.16em] text-faint"
       >
-        <Icon
-          className={layer.active ? 'h-4 w-4 text-accent' : 'h-4 w-4 text-faint'}
-          strokeWidth={1.75}
-        />
+        Layer {String(index + 1).padStart(2, '0')}
       </span>
 
-      <div className="pb-5">
-        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-          <h3 className="font-display text-base font-semibold text-slate-100">{layer.title}</h3>
-          {layer.durationMs > 0 && (
-            <span className="font-mono text-[10px] text-faint">{formatDuration(layer.durationMs)}</span>
-          )}
-          {layer.engine && <EngineTag engine={layer.engine} />}
-        </div>
-        <p className="mt-0.5 text-xs text-faint">{layer.role}</p>
-
-        <p
-          className={`mt-2.5 text-sm leading-relaxed ${
-            layer.active ? 'text-slate-200' : 'italic text-muted'
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 pr-16">
+        <span
+          aria-hidden="true"
+          className={`grid h-7 w-7 place-items-center rounded-lg border ${
+            layer.active ? 'border-accent/50 bg-ink-900 text-accent' : 'border-line bg-ink-900 text-faint'
           }`}
         >
-          {layer.paragraph}
-        </p>
-
-        {/* Adjudication: surface the critic's verbatim note inline */}
-        {layer.id === 'adjudication' && layer.critique && (
-          <p className="mt-2 border-l-2 border-line pl-3 text-xs italic text-muted">
-            “{layer.critique}”
-          </p>
+          <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
+        </span>
+        <h3 className="font-display text-base font-semibold text-slate-100">{layer.title}</h3>
+        {layer.durationMs > 0 && (
+          <span className="font-mono text-[10px] text-faint">{formatDuration(layer.durationMs)}</span>
         )}
-
-        <EvidenceDetail layer={layer} trace={trace} />
+        {layer.engine && <EngineTag engine={layer.engine} />}
       </div>
-    </motion.div>
+      <p className="mt-1 text-xs text-faint">{layer.role}</p>
+
+      <p
+        className={`mt-2.5 text-sm leading-relaxed ${
+          layer.active ? 'text-slate-200' : 'italic text-muted'
+        }`}
+      >
+        {layer.paragraph}
+      </p>
+
+      {/* Adjudication: surface the critic's verbatim note inline */}
+      {layer.id === 'adjudication' && layer.critique && (
+        <p className="mt-2 border-l-2 border-line pl-3 text-xs italic text-muted">
+          “{layer.critique}”
+        </p>
+      )}
+
+      <EvidenceDetail layer={layer} trace={trace} />
+    </motion.article>
   );
 }
 
 export function InvestigationLayers({ trace }: { trace: PipelineTrace }) {
   const layers = buildInvestigationLayers(trace);
   return (
-    <div className="surface p-5">
+    <div className="relative">
       {layers.map((layer, i) => (
-        <LayerBlock
-          key={layer.id}
-          layer={layer}
-          trace={trace}
-          index={i}
-          isLast={i === layers.length - 1}
-        />
+        <LayerBlock key={layer.id} layer={layer} trace={trace} index={i} />
       ))}
     </div>
   );

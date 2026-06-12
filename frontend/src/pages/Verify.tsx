@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, useReducedMotion } from 'framer-motion';
 import {
@@ -7,11 +7,19 @@ import {
   Mic,
   ArrowRight,
   FileText,
+  FileSearch,
   Loader2,
   RotateCcw,
   ScaleIcon,
   BookCheck,
   ShieldCheck,
+  Globe,
+  Network,
+  Gavel,
+  AtSign,
+  Link2,
+  Phone,
+  Banknote,
   type LucideIcon,
 } from 'lucide-react';
 import { SAMPLES } from '../lib/samples';
@@ -35,6 +43,167 @@ const TRUST_MARKERS: { icon: LucideIcon; label: string }[] = [
   { icon: ShieldCheck, label: 'POPIA-safe — sensitive identifiers redacted' },
 ];
 
+// The five investigation layers, mirrored from the report page — the hero
+// visual stacks them the way the final dossier stacks evidence.
+const STACK: { label: string; icon: LucideIcon }[] = [
+  { label: 'Evidence', icon: FileSearch },
+  { label: 'Verification', icon: ShieldCheck },
+  { label: 'Research', icon: Globe },
+  { label: 'Network', icon: Network },
+  { label: 'Verdict', icon: Gavel },
+];
+
+/* ── Live evidence detection (client-side preview only) ─────────────────────
+   The real parsing happens server-side; these bounded regexes exist purely so
+   the slot visibly "understands" what you paste, chip by chip. */
+
+const SCAN_CAP = 20_000; // never scan more than the server accepts
+const CHIP_CAP = 4; // per kind
+
+interface DetectedEntity {
+  kind: 'email' | 'link' | 'phone' | 'amount';
+  value: string;
+}
+
+function dedupeCap(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of values.slice(0, 40)) {
+    const key = v.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(v);
+      if (out.length >= CHIP_CAP) break;
+    }
+  }
+  return out;
+}
+
+function detectEntities(raw: string): DetectedEntity[] {
+  const text = raw.slice(0, SCAN_CAP);
+  if (!text.trim()) return [];
+  const emails = dedupeCap(text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) ?? []);
+  const links = dedupeCap(
+    (text.match(/\bhttps?:\/\/[^\s<>"')]+|\bwww\.[^\s<>"')]+/gi) ?? []).map((u) =>
+      u.replace(/[.,;]$/, '')
+    )
+  );
+  const phones = dedupeCap(
+    (text.match(/\+?\d[\d\s().-]{7,16}\d/g) ?? []).filter((p) => {
+      const digits = p.replace(/\D/g, '');
+      return digits.length >= 9 && digits.length <= 15;
+    })
+  );
+  const amounts = dedupeCap(text.match(/\b(?:R|ZAR|\$|USD)\s?\d[\d,\s.]{0,11}\d?\b/g) ?? []);
+
+  const chips: DetectedEntity[] = [
+    ...emails.map((value): DetectedEntity => ({ kind: 'email', value })),
+    ...links.map((value): DetectedEntity => ({ kind: 'link', value })),
+    ...phones.map((value): DetectedEntity => ({ kind: 'phone', value })),
+    ...amounts.map((value): DetectedEntity => ({ kind: 'amount', value })),
+  ];
+  return chips.slice(0, 10);
+}
+
+const CHIP_ICON: Record<DetectedEntity['kind'], LucideIcon> = {
+  email: AtSign,
+  link: Link2,
+  phone: Phone,
+  amount: Banknote,
+};
+
+function EvidenceChips({ entities }: { entities: DetectedEntity[] }) {
+  const reduceMotion = useReducedMotion();
+  if (entities.length === 0) return null;
+  return (
+    <div className="mt-3" aria-live="polite">
+      <p className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
+        Detected — the agents will verify these
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {entities.map((e, i) => {
+          const Icon = CHIP_ICON[e.kind];
+          return (
+            <motion.span
+              key={`${e.kind}-${e.value}`}
+              {...(reduceMotion
+                ? {}
+                : {
+                    initial: { opacity: 0, scale: 0.96 },
+                    animate: { opacity: 1, scale: 1 },
+                    transition: { duration: 0.16, ease: 'easeOut' as const, delay: i * 0.03 },
+                  })}
+              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-300"
+            >
+              <Icon className="h-3 w-3 shrink-0 text-accent" strokeWidth={1.75} />
+              <span className="truncate" style={{ maxWidth: '14rem' }}>
+                {e.value}
+              </span>
+            </motion.span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── The stacked-dossier hero visual ─────────────────────────────────────────
+   Five isometric planes — one per investigation layer — with the active layer
+   lifting out of the stack. Pure CSS 3D transforms; decorative (aria-hidden);
+   static when the user prefers reduced motion. */
+
+function LayerStack() {
+  const reduceMotion = useReducedMotion();
+  const [active, setActive] = useState(STACK.length - 1);
+
+  useEffect(() => {
+    if (reduceMotion) return;
+    const t = setInterval(() => setActive((a) => (a + 1) % STACK.length), 1800);
+    return () => clearInterval(t);
+  }, [reduceMotion]);
+
+  return (
+    <div aria-hidden="true" className="relative hidden h-[300px] select-none lg:block">
+      <div className="absolute inset-0 [perspective:1100px]">
+        <div className="absolute left-1/2 top-1/2 h-0 w-0 [transform-style:preserve-3d]">
+          {STACK.map((layer, i) => {
+            const Icon = layer.icon;
+            const isActive = i === active;
+            return (
+              <div
+                key={layer.label}
+                className={`absolute flex h-[120px] w-[230px] items-end rounded-xl border p-3 transition-all duration-300 ease-out ${
+                  isActive ? 'border-accent/70 bg-ink-800' : 'border-line bg-ink-850/95'
+                }`}
+                style={{
+                  transform: `translate(-50%, -50%) rotateX(56deg) rotateZ(-14deg) translateZ(${
+                    i * 34 + (isActive ? 18 : 0)
+                  }px)`,
+                  boxShadow: isActive
+                    ? '0 18px 40px -18px rgba(0,0,0,0.7)'
+                    : '0 10px 24px -16px rgba(0,0,0,0.6)',
+                }}
+              >
+                <span
+                  className={`inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wide ${
+                    isActive ? 'text-accent' : 'text-faint'
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  {layer.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <p className="absolute bottom-0 left-0 right-0 text-center font-mono text-[10px] uppercase tracking-[0.16em] text-faint">
+        Six specialist agents · evidence stacked into a verdict
+      </p>
+    </div>
+  );
+}
+
 export function Verify() {
   const [mode, setMode] = useState<Mode>('message');
   const [text, setText] = useState('');
@@ -42,6 +211,7 @@ export function Verify() {
   const [fileNote, setFileNote] = useState<string | null>(null);
   const [voiceMeta, setVoiceMeta] = useState<{ durationSec: number; locale: string } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const reduceMotion = useReducedMotion();
   const { runAnalysis } = useCase();
@@ -52,6 +222,8 @@ export function Verify() {
   function evidence(): string {
     return text.trim();
   }
+
+  const detected = useMemo(() => detectEntities(text), [text]);
 
   // Voice transcript joins the SAME evidence channel as paste/upload, so the
   // user can edit it before running verification.
@@ -105,18 +277,32 @@ export function Verify() {
 
   return (
     <div className="bg-grid">
-      <div className="mx-auto flex max-w-2xl flex-col px-6 pb-20 pt-16 sm:pt-24">
-        {/* Hero — calm and confident, no marketing fluff */}
-        <motion.header {...reveal}>
-          <span className="eyebrow">Fraud intelligence platform</span>
-          <h1 className="mt-3 font-display text-3xl font-semibold leading-[1.12] tracking-tight text-white sm:text-[2.6rem]">
-            Know if a job offer is real — before you reply.
-          </h1>
-          <p className="mt-4 max-w-xl text-sm leading-relaxed text-muted sm:text-base">
-            A team of specialist agents verifies the recruiter, the sending domain, and the
-            scam-network intelligence behind the message — then shows you the proof.
-          </p>
-        </motion.header>
+      <div className="mx-auto flex max-w-5xl flex-col px-6 pb-20 pt-14 sm:pt-20">
+        {/* Hero — copy left, stacked-dossier visual right */}
+        <div className="grid items-center gap-8 lg:grid-cols-[1fr_340px]">
+          <motion.header {...reveal}>
+            <span className="eyebrow">Fraud intelligence platform</span>
+            <h1 className="mt-3 font-display text-3xl font-semibold leading-[1.12] tracking-tight text-white sm:text-[2.6rem]">
+              Know if a job offer is real — before you reply.
+            </h1>
+            <p className="mt-4 max-w-xl text-sm leading-relaxed text-muted sm:text-base">
+              Six specialist agents verify the recruiter, the sending domain, and the
+              scam-network intelligence behind the message — then stack the evidence into a
+              verdict you can read, hear, and act on.
+            </p>
+          </motion.header>
+          <motion.div
+            {...(reduceMotion
+              ? {}
+              : {
+                  initial: { opacity: 0 },
+                  animate: { opacity: 1 },
+                  transition: { duration: 0.3, ease: 'easeOut' as const, delay: 0.1 },
+                })}
+          >
+            <LayerStack />
+          </motion.div>
+        </div>
 
         {/* The single verification slot */}
         <motion.section
@@ -128,7 +314,23 @@ export function Verify() {
                 transition: { duration: 0.24, ease: 'easeOut' as const, delay: 0.06 },
               })}
           aria-label="Submit evidence to verify"
-          className="surface mt-9 p-4 sm:p-5"
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) {
+              setMode('upload');
+              void onFile(f);
+            }
+          }}
+          className={`surface mx-auto mt-10 w-full max-w-2xl p-4 transition sm:p-5 ${
+            dragging ? 'border-accent/70 ring-2 ring-accent/30' : ''
+          }`}
         >
           {/* Mode selector — segmented pills */}
           <div
@@ -180,11 +382,12 @@ export function Verify() {
                   onKeyDown={(e) => {
                     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') submit();
                   }}
-                  rows={10}
+                  rows={9}
                   aria-label="Paste the message — email, SMS, or link"
-                  placeholder="Paste the message — an email (with headers if you have them), an SMS, or a link. Include the sender address."
+                  placeholder="Paste the message — an email (with headers if you have them), an SMS, or a link. You can also drop a screenshot anywhere on this card."
                   className="w-full resize-y rounded-lg border border-line bg-ink-900 p-3.5 text-sm text-slate-100 placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
                 />
+                <EvidenceChips entities={detected} />
               </div>
             )}
 
@@ -202,7 +405,7 @@ export function Verify() {
                     <FileText className="h-7 w-7 text-faint" strokeWidth={1.75} />
                   )}
                   <span className="text-sm text-slate-200">
-                    {uploading ? 'Reading document…' : (fileName ?? 'Click to choose a file')}
+                    {uploading ? 'Reading document…' : (fileName ?? 'Click to choose a file — or drop it here')}
                   </span>
                   <span className="text-xs text-faint">.eml, .txt, PDF or screenshot</span>
                 </button>
@@ -219,9 +422,12 @@ export function Verify() {
                 />
                 {fileNote && <p className="mt-3 text-xs text-muted">{fileNote}</p>}
                 {text && (
-                  <p className="mt-2 text-xs text-faint">
-                    Extracted text is ready — run verification below.
-                  </p>
+                  <div>
+                    <p className="mt-2 text-xs text-faint">
+                      Extracted text is ready — run verification below.
+                    </p>
+                    <EvidenceChips entities={detected} />
+                  </div>
                 )}
               </div>
             )}
@@ -259,6 +465,7 @@ export function Verify() {
                     <p className="mt-2 text-xs text-faint">
                       Review and correct the transcript above, then run verification.
                     </p>
+                    <EvidenceChips entities={detected} />
                   </div>
                 ) : (
                   <VoiceRecorder onTranscript={onTranscript} />

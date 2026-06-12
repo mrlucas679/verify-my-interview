@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import {
@@ -144,6 +144,40 @@ function Investigating() {
   );
 }
 
+// Slim verdict bar that fades in once the full verdict card scrolls out of
+// view, so the score and risk band stay readable through the whole dossier.
+const LEVEL_CLS: Record<string, string> = {
+  'Likely Scam': 'text-risk-scam',
+  Suspicious: 'text-risk-needs',
+  'Needs More Verification': 'text-risk-needs',
+  'Low Risk': 'text-risk-low',
+};
+
+function StickyVerdict({ report, visible }: { report: RiskReport; visible: boolean }) {
+  return (
+    <AnimatePresence>
+      {visible && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+          className="fixed inset-x-0 top-0 z-40 border-b border-line bg-ink-900/90 backdrop-blur"
+        >
+          <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-6 py-2">
+            <span className={`text-sm font-semibold ${LEVEL_CLS[report.risk_level] ?? 'text-muted'}`}>
+              {report.risk_level}
+            </span>
+            <span className="font-mono text-xs text-faint">
+              Risk {report.risk_score}/100 · confidence {Math.round(report.confidence * 100)}%
+            </span>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
 function Section({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
     <section>
@@ -155,6 +189,19 @@ function Section({ label, children }: { label: ReactNode; children: ReactNode })
 
 export function Report() {
   const { result, loading, error } = useCase();
+  const verdictRef = useRef<HTMLElement>(null);
+  const [pastVerdict, setPastVerdict] = useState(false);
+
+  // Show the sticky mini-verdict only after the full card leaves the viewport.
+  useEffect(() => {
+    const el = verdictRef.current;
+    if (!el || !result) return;
+    const io = new IntersectionObserver(([entry]) => setPastVerdict(!entry.isIntersecting), {
+      rootMargin: '-48px 0px 0px 0px',
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [result]);
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
@@ -205,8 +252,11 @@ export function Report() {
           transition={{ duration: 0.2 }}
           className="space-y-9"
         >
+          {/* Sticky mini-verdict while reading the dossier */}
+          <StickyVerdict report={result.report} visible={pastVerdict} />
+
           {/* (1) Verdict header */}
-          <header>
+          <header ref={verdictRef}>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <h1 className="font-display text-2xl font-semibold tracking-tight text-white">
                 Verification report
