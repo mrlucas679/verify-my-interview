@@ -20,16 +20,46 @@ export function scoreStructuredSignals(
   signals: StructuredSignal[],
   toolCoverage: number
 ): { score: number; level: RiskLevel; confidence: number } {
-  const raw = signals.reduce((sum, s) => sum + s.points, 0);
+  // Scam-mechanic signals: evidence of HOW the fraud operates. Semantic
+  // resemblance alone is generic job language — when a case has verified
+  // green signals and zero mechanics, resemblance counts at half weight so a
+  // clean interview invite is not dragged up the bands by corpus similarity.
+  const MECHANIC_IDS = new Set([
+    'upfront_payment_request',
+    'training_fee_narrative',
+    'money_mule_request',
+    'credential_request',
+    'sms_reply_bait',
+    'reply_to_mismatch',
+    'dmarc_fail',
+    'spf_fail',
+    'lookalike_domain',
+    'high_keyword_score',
+    'urgency_pressure',
+    'no_interview_offer',
+    'network_infrastructure_match',
+  ]);
+  const hasMechanic = signals.some((s) => s.category === 'red' && MECHANIC_IDS.has(s.id));
+  const greenTotal = signals.reduce((sum, s) => sum + Math.min(0, s.points), 0);
+  const dampenSemantic = !hasMechanic && greenTotal <= -15;
+
+  const raw = signals.reduce((sum, s) => {
+    if (s.id === 'network_match' && dampenSemantic) return sum + Math.round(s.points / 2);
+    return sum + s.points;
+  }, 0);
   const score = Math.max(0, Math.min(100, raw));
+  // Capped at 0.95: a deterministic heuristic never gets to claim certainty.
   const confidence = Math.max(
     0,
-    Math.min(1, 0.25 + toolCoverage * 0.45 + Math.min(signals.length, 6) * 0.05)
+    Math.min(0.95, 0.25 + toolCoverage * 0.45 + Math.min(signals.length, 6) * 0.05)
   );
   let level = levelFromScore(score, confidence);
   // Floor rule: wording that matches the scam-intelligence network must never
-  // be presented as "Low Risk" — sparse evidence is inconclusive, not safe.
-  if (level === 'Low Risk' && signals.some((s) => s.id === 'network_match')) {
+  // be presented as "Low Risk" when there is nothing else to go on — sparse
+  // evidence is inconclusive, not safe. When the case carries VERIFIED green
+  // signals and no scam mechanics (dampenSemantic), the greens earned the
+  // verdict and the floor does not apply.
+  if (level === 'Low Risk' && !dampenSemantic && signals.some((s) => s.id === 'network_match')) {
     level = 'Needs More Verification';
   }
   return { score, level, confidence };

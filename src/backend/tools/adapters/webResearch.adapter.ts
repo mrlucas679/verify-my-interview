@@ -29,6 +29,8 @@ export async function webResearchAdapter(input: {
         result_count: r.resultCount,
         citations: r.citations,
         top_results: r.topResults,
+        official_listing_url: r.officialListingUrl,
+        scam_mention_url: r.scamMentionUrl,
       },
       duration: Date.now() - start,
     };

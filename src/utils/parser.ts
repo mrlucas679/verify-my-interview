@@ -45,13 +45,18 @@ export class EvidenceParser {
       .filter((d): d is string => Boolean(d));
     entities.domains = uniq([...domainsFromEmails, ...domainsFromUrls]);
 
-    // Phone numbers (require a leading + or at least 7 digits to reduce noise)
+    // Phone numbers (require a leading + or at least 7 digits to reduce noise).
+    // IP addresses in Received headers (198.51.100.72) match the digit pattern
+    // too — exclude anything IP-shaped so we never burn a phone-intel lookup
+    // on a mail-relay address.
     const phoneMatches =
       evidence.match(/\+?\d[\d().\-\s]{6,}\d/g) || [];
     entities.phones = uniq(
       phoneMatches
         .map((p) => p.trim())
         .filter((p) => (p.match(/\d/g) || []).length >= 7)
+        .filter((p) => !/^\d{1,3}(\.\d{1,3}){3}$/.test(p.replace(/\s/g, '')))
+        .filter((p) => (p.match(/\./g) || []).length < 2)
     );
 
     // Money / payment requests
@@ -75,6 +80,33 @@ export class EvidenceParser {
     let companyMatch: RegExpExecArray | null;
     while ((companyMatch = companyRegex.exec(evidence)) !== null) {
       companyMatches.push(companyMatch[1].trim());
+    }
+
+    // Spoken/narrative phrasing: "the company name is Fake Identity",
+    // "a company called Nimbus Talent" (voice transcripts use these forms).
+    const namedRegex =
+      /\bcompany(?:['’]s)?\s+(?:name\s+is|called|named)\s+([A-Z][A-Za-z0-9&.\- ]{1,40}?)(?=[,.\n!?]|\s+(?:and|but|so|they|the|near|in|on|at|who|which)\b|$)/gim;
+    let namedMatch: RegExpExecArray | null;
+    while ((namedMatch = namedRegex.exec(evidence)) !== null) {
+      companyMatches.push(namedMatch[1].trim());
+    }
+
+    // Well-known impersonation targets count as the claimed employer wherever
+    // they appear (subject lines, "the Amazon ... position") — scammers name
+    // the brand without "at/from", so preposition patterns miss them.
+    const KNOWN_BRANDS = [
+      'Microsoft', 'Amazon', 'Google', 'Meta', 'Facebook', 'Apple', 'Netflix',
+      'Shopify', 'Stripe', 'PayPal', 'Tesla', 'LinkedIn', 'TikTok',
+      'Standard Bank', 'Capitec', 'FNB', 'Absa', 'Nedbank', 'Shoprite',
+      'Pick n Pay', 'Transnet', 'Eskom', 'Sasol', 'MTN', 'Vodacom',
+    ];
+    if (companyMatches.length === 0) {
+      for (const brand of KNOWN_BRANDS) {
+        if (new RegExp(`\\b${brand.replace(/ /g, '\\s+')}\\b`).test(evidence)) {
+          companyMatches.push(brand);
+          break; // first brand mentioned is the claimed employer
+        }
+      }
     }
     entities.companies = uniq(companyMatches);
 

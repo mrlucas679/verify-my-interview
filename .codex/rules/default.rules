@@ -1,0 +1,59 @@
+# Verify My Interview command policy.
+# Rules apply to commands Codex asks to run outside the sandbox.
+
+prefix_rule(
+    pattern = ["npm", "run", "build"],
+    decision = "allow",
+    justification = "Build is a required verification gate for this project.",
+    match = ["npm run build"],
+)
+
+prefix_rule(
+    pattern = ["npm", "run", "lint"],
+    decision = "allow",
+    justification = "Lint is a required verification gate for this project.",
+    match = ["npm run lint"],
+)
+
+prefix_rule(
+    pattern = ["npm", "test"],
+    decision = "allow",
+    justification = "Jest tests are a required verification gate for this project.",
+    match = ["npm test"],
+)
+
+prefix_rule(
+    pattern = ["npm", "run", "eval"],
+    decision = "allow",
+    justification = "Offline evals are deterministic and required before commits.",
+    match = ["npm run eval"],
+)
+
+prefix_rule(
+    pattern = ["npm", "start"],
+    decision = "prompt",
+    justification = "The user prefers no auto-started servers; ask before live runs.",
+    match = ["npm start"],
+)
+
+prefix_rule(
+    pattern = ["npm", "run", ["dev", "dev:web"]],
+    decision = "prompt",
+    justification = "The user prefers no auto-started servers; ask before live runs.",
+    match = ["npm run dev", "npm run dev:web"],
+)
+
+prefix_rule(
+    pattern = ["git", "reset"],
+    decision = "prompt",
+    justification = "Reset can destroy unrelated user work in this dirty worktree.",
+    match = ["git reset --hard"],
+)
+
+prefix_rule(
+    pattern = ["git", "checkout"],
+    decision = "prompt",
+    justification = "Checkout can overwrite unrelated user work in this dirty worktree.",
+    match = ["git checkout -- src/backend/server.ts"],
+)
+

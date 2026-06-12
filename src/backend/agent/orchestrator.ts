@@ -104,7 +104,7 @@ export class AgentOrchestrator {
       () => investigator.run(input),
       (r) => ({
         engine: r.engine,
-        summary: `Called ${r.toolsUsed.length} verification tool(s); ${r.conclusion}`,
+        summary: `Ran ${r.toolsUsed.length} independent check${r.toolsUsed.length === 1 ? '' : 's'} on the identifiers. ${r.conclusion}`,
         findings: r.toolsUsed
           .filter((t) => t.result.success)
           .slice(0, 6)

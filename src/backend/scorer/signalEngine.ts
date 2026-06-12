@@ -65,6 +65,32 @@ function channelKind(domain: string): 'aggregator' | 'free host' | 'link shorten
   return null;
 }
 
+function isNegatedPaymentCue(evidence: string, cue: string): boolean {
+  const haystack = evidence.toLowerCase();
+  const needle = cue.toLowerCase();
+  const idx = haystack.indexOf(needle);
+  if (idx < 0) return false;
+  const before = haystack.slice(Math.max(0, idx - 50), idx);
+  const after = haystack.slice(idx, Math.min(haystack.length, idx + needle.length + 50));
+  return (
+    /\b(?:no|not|never|without)\b[^.\n]{0,45}$/.test(before) ||
+    /\b(?:not|required|charged|needed|payable)\b[^.\n]{0,35}\b(?:no|never)\b/.test(after) ||
+    /\b(?:is|are)\s+not\s+(?:required|charged|payable|needed)\b/.test(after)
+  );
+}
+
+function isCandidatePaidBenefitContext(evidence: string, matchText: string): boolean {
+  const haystack = evidence.toLowerCase();
+  const needle = matchText.toLowerCase();
+  const idx = haystack.indexOf(needle);
+  if (idx < 0) return false;
+  const window = haystack.slice(Math.max(0, idx - 60), Math.min(haystack.length, idx + needle.length + 80));
+  return (
+    /\b(?:you\s+will\s+be|you'll\s+be|will\s+be|be)\s+paid\b/.test(window) ||
+    /\b(?:stipend|allowance|salary|per\s+(?:month|week|hour)|during\s+the\s+training\s+period)\b/.test(window)
+  );
+}
+
 export function coverage(toolsUsed: AgentToolCall[]): number {
   const ok = new Set(
     toolsUsed.filter((t) => t.result.success && CORE_TOOLS.includes(t.tool)).map((t) => t.tool)
@@ -109,19 +135,26 @@ export function deriveSignals(
     if (headers.dmarc === 'fail') {
       signals.push({
         id: 'dmarc_fail',
-        label: 'Sender failed DMARC authentication',
+        label: 'Sender identity check failed',
         category: 'red',
         points: 15,
-        evidence: { source: 'email_headers', detail: 'Authentication-Results: dmarc=fail' },
+        evidence: {
+          source: 'email_headers',
+          detail:
+            'The email failed the internet’s standard proof-of-sender check — a strong sign the sender name is faked (technical: DMARC=fail)',
+        },
       });
     }
     if (headers.spf === 'fail' || headers.spf === 'softfail') {
       signals.push({
         id: 'spf_fail',
-        label: 'Sender failed SPF authentication',
+        label: 'Sent from an unauthorised server',
         category: 'red',
         points: 10,
-        evidence: { source: 'email_headers', detail: `Authentication-Results: spf=${headers.spf}` },
+        evidence: {
+          source: 'email_headers',
+          detail: `This email was sent from a server the domain does not authorise — common in spoofed mail (technical: SPF=${headers.spf})`,
+        },
       });
     }
     if (headers.freeMailFrom && entities.companies.length > 0) {
@@ -167,7 +200,7 @@ export function deriveSignals(
     const paymentCues = [
       ...(pd.payment_methods || []),
       ...entities.money_requests.filter((m) => /fee|upfront|gift\s?card|wire|crypto|bitcoin|deposit/i.test(m)),
-    ];
+    ].filter((cue) => !isNegatedPaymentCue(evidence, cue));
     // Demand phrasing in the evidence itself ("a compliance deposit of $200 is
     // required", "pay via USDT/Zelle"). "direct deposit" payroll language does
     // not match — the amount or payment rail must be tied to the demand.
@@ -176,6 +209,7 @@ export function deriveSignals(
         /\b(?:deposit|fee)\s*(?:of\s*)?\$\s?\d[\d,.]*/i,
         /\$\s?\d[\d,.]*[^.\n]{0,30}\b(?:fee|deposit|upfront|is required)/i,
         /\b(?:pay|payment|send)\b[^.\n]{0,40}\b(?:usdt|btc|crypto(?:currency)?|gift\s?cards?|wire transfer|zelle|cash\s?app)/i,
+        /\b(?:buy|purchase|pay\s+for|order)\b[^.\n]{0,70}\b(?:starter\s+(?:kit|pack)|uniform|equipment|training\s+materials?)\b/i,
       ]
         .map((re) => evidence.match(re))
         .find(Boolean);
@@ -186,7 +220,7 @@ export function deriveSignals(
         id: 'upfront_payment_request',
         label: 'Up-front payment requested',
         category: 'red',
-        points: 35,
+        points: 40,
         evidence: {
           source: 'detect_scam_patterns',
           detail: `Payment/fee language: ${paymentCues.slice(0, 4).join(', ')}`,
@@ -214,6 +248,21 @@ export function deriveSignals(
         evidence: {
           source: 'detect_scam_patterns',
           detail: `Urgency cues: ${pd.urgency_language.slice(0, 4).join(', ')}`,
+        },
+      });
+    }
+    const deadlineCue = evidence.match(
+      /\b(?:expires?|expire|deadline|within|by|before)\b[^.\n]{0,35}\b(?:\d{1,2}\s*(?:hours?|hrs?|days?)|today|tonight|24\s*hours?)\b|\b(?:act|reply|respond|complete|pay|submit)\b[^.\n]{0,35}\b(?:today|tonight|now|immediately|within\s+\d{1,2}\s*(?:hours?|hrs?|days?))/i
+    );
+    if (deadlineCue && !signals.some((s) => s.id === 'urgency_pressure')) {
+      signals.push({
+        id: 'urgency_pressure',
+        label: 'Urgency / pressure tactics',
+        category: 'red',
+        points: 10,
+        evidence: {
+          source: 'detect_scam_patterns',
+          detail: `Deadline pressure: "${deadlineCue[0].trim().slice(0, 90)}"`,
         },
       });
     }
@@ -300,15 +349,29 @@ export function deriveSignals(
         evidence: { source: 'lookup_domain_rdap', detail: `${dom.domain} sits on a TLD associated with abuse` },
       });
     }
-    if (dom.address_risk === 'high' || dom.domain_risk === 'high') {
+    if (dom.domain_risk === 'high') {
       signals.push({
         id: 'email_flagged_high_risk',
-        label: 'Recruiter email/domain flagged high-risk',
+        label: 'Recruiter domain flagged high-risk',
         category: 'red',
         points: 18,
         evidence: {
           source: 'lookup_domain_rdap',
-          detail: `Reputation provider rates ${dom.domain} high-risk (address=${dom.address_risk ?? 'n/a'}, domain=${dom.domain_risk ?? 'n/a'})`,
+          detail: `An email-reputation service rates the whole domain ${dom.domain} as high-risk for fraud`,
+        },
+      });
+    } else if (dom.address_risk === 'high') {
+      // Address-level risk on an otherwise clean domain often just means the
+      // mailbox is unknown/new — real signal, but weaker than a bad domain,
+      // and it must not smear an established employer's domain.
+      signals.push({
+        id: 'email_flagged_high_risk',
+        label: 'Recruiter mailbox flagged risky',
+        category: 'red',
+        points: 10,
+        evidence: {
+          source: 'lookup_domain_rdap',
+          detail: `An email-reputation service flags this specific mailbox as risky (the ${dom.domain} domain itself is not flagged)`,
         },
       });
     }
@@ -404,7 +467,7 @@ export function deriveSignals(
         points: 18,
         evidence: {
           source: 'research_company_web',
-          detail: `Web search surfaced scam/fraud/complaint mentions for "${entities.companies[0] || 'this company'}"${research.citations?.[0] ? ` (${research.citations[0]})` : ''}`,
+          detail: `Web search surfaced scam/fraud/complaint mentions for "${entities.companies[0] || 'this company'}"${research.scam_mention_url ? ` (${research.scam_mention_url})` : ''}`,
         },
       });
     }
@@ -416,7 +479,7 @@ export function deriveSignals(
         points: -10,
         evidence: {
           source: 'research_company_web',
-          detail: `A matching official careers/job listing was found${research.citations?.[0] ? ` (${research.citations[0]})` : ''}`,
+          detail: `A matching official careers/job listing was found${research.official_listing_url ? ` (${research.official_listing_url})` : ''}`,
         },
       });
     }
@@ -457,12 +520,12 @@ export function deriveSignals(
     ) ||
     evidence.match(/\b(?:fee|deposit|pay(?:ment)?)\b[^.\n]{0,25}\bR\s?\d[\d,. ]*/i) ||
     evidence.match(/\bR\s?\d[\d,. ]*[^.\n]{0,25}\b(?:fee|deposit|non-?refundable|to start|to begin)\b/i);
-  if (feeCue && !has('upfront_payment_request')) {
+  if (feeCue && !isNegatedPaymentCue(evidence, feeCue[0]) && !has('upfront_payment_request')) {
     signals.push({
       id: 'upfront_payment_request',
       label: 'Up-front payment requested',
       category: 'red',
-      points: 35,
+      points: 40,
       evidence: { source: 'text', detail: `Fee/payment demand: "${feeCue[0].trim().slice(0, 80)}"` },
     });
   }
@@ -471,7 +534,7 @@ export function deriveSignals(
     new Set(
       (
         evidence.match(
-          /\b(?:id\s?(?:copy|number|document)|copy of (?:your )?id|sars letter|proof of (?:banking|bank|residence|address)|bank(?:ing)? details|account number)\b/gi
+          /\b(?:id\s?(?:copy|number|document)|copy of (?:your )?id|sars letter|proof of (?:banking|bank|residence|address)|bank(?:ing)? details|account number|online[-\s]?banking username|login credentials|one[-\s]?time\s+(?:pin|code|passcode)|otp|app approval code|banking app approval code)\b/gi
         ) || []
       ).map((m) => m.toLowerCase())
     )
@@ -490,6 +553,31 @@ export function deriveSignals(
       evidence: {
         source: 'text',
         detail: `Requested before any verified hire: ${credentialCues.slice(0, 4).join(', ')}`,
+      },
+    });
+  }
+
+  // --- Money-mule / payment-routing request --------------------------------
+  // A job that asks the candidate to use a personal account to receive and
+  // forward customer/company funds is not a normal payroll step. It exposes the
+  // user to fraud and laundering risk even if no fee is requested.
+  const moneyMuleCue =
+    /\b(?:receive|accept|process|deposit|route)\b[^.\n]{0,70}\b(?:customer|client|company|refunds?|payments?|money|funds?)\b[^.\n]{0,90}\b(?:personal|your|own)\s+bank\s+account\b/i.test(
+      evidence
+    ) ||
+    /\b(?:personal|your|own)\s+bank\s+account\b[^.\n]{0,100}\b(?:forward|transfer|send|wire|route)\b[^.\n]{0,60}\b(?:funds?|money|payments?|refunds?|rest)\b/i.test(
+      evidence
+    );
+  if (moneyMuleCue) {
+    signals.push({
+      id: 'money_mule_request',
+      label: 'Asked to move money through a personal bank account',
+      category: 'red',
+      points: 45,
+      evidence: {
+        source: 'text',
+        detail:
+          'The role asks the candidate to receive or forward customer/company funds through a personal bank account',
       },
     });
   }
@@ -515,6 +603,27 @@ export function deriveSignals(
         },
       });
     }
+  }
+
+  // --- Training/registration fee in narrative form --------------------------
+  // Victims describing a scam in their own words say "people paid 6,000 for
+  // training" — no currency symbol, no "fee" keyword, so the written-scam
+  // pattern list misses it. Catch spoken/narrative fee phrasing directly.
+  const narrativeFee =
+    /\b(?:paid|pay|paying|payment\s+of|asked\s+(?:me|us|them)?\s*(?:to\s+pay|for))\s+(?:R\s?)?\d[\d\s,.]{1,9}\s*(?:rand\b|for\b|to\b)?[^.\n]{0,30}\b(?:training|registration|onboarding|uniform|starter\s+pack|admin(?:istration)?\s+fee|equipment)/i;
+  const narrativeFeeMatch = evidence.match(narrativeFee);
+  if (narrativeFeeMatch && !isCandidatePaidBenefitContext(evidence, narrativeFeeMatch[0])) {
+    signals.push({
+      id: 'training_fee_narrative',
+      label: 'Money asked for training / registration',
+      category: 'red',
+      points: 20,
+      evidence: {
+        source: 'detect_scam_patterns',
+        detail:
+          'The account describes people paying for training, registration, or equipment to get the job — legitimate employers never charge candidates',
+      },
+    });
   }
 
   // --- SMS reply-bait (smishing stage one) ---------------------------------

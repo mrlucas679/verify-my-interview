@@ -60,8 +60,9 @@ export class EvidenceAgent {
       evidenceType,
       headers,
       findings,
-      summary: `Classified input as ${evidenceType.replace('_', ' ')}; extracted ${counts || 'no entities'}${
-        headers.isRawEmail ? '; parsed full email headers' : ''
+      summary: `Read the submission as ${evidenceType.replace('_', ' ')} and found ${
+        counts || 'nothing checkable — no email address, link, company name, or phone number'
+      }${headers.isRawEmail ? '; the full email routing headers were present and examined' : ''
       }.`,
     };
   }

@@ -54,8 +54,10 @@ export class NetworkAgent {
 
     const summary =
       linkedReports.length || matches.length
-        ? `Linked to ${linkedReports.length} prior report(s) via ${sharedEntities.length} shared identifier(s); ${matches.length} semantic match(es).`
-        : 'No prior reports share this case’s identifiers; no semantic matches.';
+        ? linkedReports.length
+          ? `This case shares ${sharedEntities.length} identifier${sharedEntities.length === 1 ? '' : 's'} (domains, emails, or numbers) with ${linkedReports.length} earlier scam report${linkedReports.length === 1 ? '' : 's'} — the strongest kind of link${matches.length ? `; the wording also resembles ${matches.length} known report${matches.length === 1 ? '' : 's'}` : ''}.`
+          : `Nothing in this case reuses known scam infrastructure, but its wording closely resembles ${matches.length} previously reported scam${matches.length === 1 ? '' : 's'}.`
+        : 'Nothing in this case matches the scam-intelligence network — no shared infrastructure and no similar wording.';
 
     return { engine: 'deterministic', matches, graph, findings, summary };
   }

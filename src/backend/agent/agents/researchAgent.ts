@@ -54,7 +54,7 @@ export class ResearchAgent {
           claim: `An official-looking job listing exists for ${company}`,
           evidence: `Careers/jobs result found in public search`,
           confidence: 0.7,
-          source: cite(),
+          source: data.official_listing_url ?? cite(),
         });
       }
       if (data.scam_mentions ?? data.scamMentions) {
@@ -62,7 +62,7 @@ export class ResearchAgent {
           claim: `Public scam/fraud complaints mention "${company}" recruiting`,
           evidence: 'Search results contain scam/fraud/complaint language for this company',
           confidence: 0.75,
-          source: cite(),
+          source: data.scam_mention_url ?? cite(),
         });
       }
       if (findings.length === 0) {

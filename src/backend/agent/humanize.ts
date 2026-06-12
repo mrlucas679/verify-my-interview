@@ -24,14 +24,21 @@ export function summarizeToolResult(tool: string, data: unknown): string {
       const dns = rec(d.dns_records);
       const whois = rec(d.whois_data);
       const parts: string[] = [];
-      if (arr(dns.MX).length === 0) parts.push('cannot receive email (no MX records)');
-      if (arr(dns.A).length === 0 && arr(dns.AAAA).length === 0) parts.push('hosts no website (no A/AAAA records)');
+      if (arr(dns.MX).length === 0)
+        parts.push('cannot actually receive email — replies to it go nowhere, which no real employer would allow (technical: no MX records)');
+      if (arr(dns.A).length === 0 && arr(dns.AAAA).length === 0)
+        parts.push('has no website behind it');
       const age = whois.age_days;
-      if (typeof age === 'number') parts.push(`registered ${age} day${age === 1 ? '' : 's'} ago`);
-      else parts.push('registration date is hidden or unavailable');
-      if (d.risky_tld === true) parts.push('uses a high-abuse domain extension');
-      if (d.is_disposable === true) parts.push('is a disposable-email domain');
-      return `${domain}: ${parts.slice(0, 3).join('; ')}.`;
+      if (typeof age === 'number') {
+        parts.push(
+          age < 180
+            ? `was registered only ${age} day${age === 1 ? '' : 's'} ago — very young for an employer`
+            : `was registered ${age} days ago`
+        );
+      } else parts.push('hides or lacks a registration date');
+      if (d.risky_tld === true) parts.push('uses a domain extension common in abuse');
+      if (d.is_disposable === true) parts.push('belongs to a throwaway-email service');
+      return `The domain ${domain} ${parts.slice(0, 3).join('; it ')}.`;
     }
     case 'detect_scam_patterns': {
       const n = typeof d.keyword_count === 'number' ? d.keyword_count : 0;

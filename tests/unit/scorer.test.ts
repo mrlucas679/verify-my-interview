@@ -32,6 +32,29 @@ describe('scoreStructuredSignals — sparse-evidence floor', () => {
     expect(level).toBe('Low Risk');
   });
 
+  it('dampens semantic resemblance for verified-legit cases (greens, no scam mechanics)', () => {
+    const greens: StructuredSignal[] = [
+      {
+        id: 'established_domain',
+        label: 'Established domain',
+        category: 'positive',
+        points: -10,
+        evidence: { source: 'lookup_domain_rdap', detail: 'registered 10146d ago' },
+      },
+      {
+        id: 'mx_valid',
+        label: 'Domain has valid mail records',
+        category: 'positive',
+        points: -5,
+        evidence: { source: 'lookup_domain_rdap', detail: '1 MX record' },
+      },
+    ];
+    const { score, level } = scoreStructuredSignals([networkMatch(24), ...greens], 0.7);
+    // 24/2 + (-15) = -3 → clamped 0 → Low Risk allowed (floor waived for greens)
+    expect(score).toBe(0);
+    expect(level).toBe('Low Risk');
+  });
+
   it('keeps higher bands untouched', () => {
     const { level, score } = scoreStructuredSignals(
       [networkMatch(24), networkMatch(22), networkMatch(20), networkMatch(20)],
