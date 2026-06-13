@@ -20,26 +20,33 @@ import { ChatPanel } from '../components/ChatPanel';
 import { EvidenceGraph } from '../components/EvidenceGraph';
 import { GuidanceCitations } from '../components/GuidanceCitations';
 import type { PipelineTrace, RiskReport } from '../lib/types';
+import { engineModeLabel, reportNarration } from '../lib/communication';
 
 const STEPS = [
-  'Evidence: classifying input, parsing headers',
-  'Verification: registry, domain & pattern checks',
-  'Research: searching the public web',
-  'Network: matching the intelligence graph',
-  'Adjudication: striking unsupported claims, composing the verdict',
+  'Reading the message and pulling out the names, links, and contact details',
+  'Checking company, domain, phone, and payment clues',
+  'Looking for public evidence that confirms or contradicts the offer',
+  'Comparing identifiers with prior scam reports',
+  'Reviewing the proof and writing a clear verdict',
 ];
 
-function EngineBadge({ mode }: { mode: PipelineTrace['engine_mode'] }) {
+function EngineBadge({ trace }: { trace: PipelineTrace }) {
+  const degraded = (trace.degraded_stages?.length ?? 0) > 0;
+  const label = engineModeLabel(trace.engine_mode, degraded);
   const map = {
-    foundry: { label: 'Microsoft Foundry', cls: 'bg-accent-soft text-accent border-accent/40' },
-    mixed: { label: 'Foundry + fallback', cls: 'bg-risk-needs/10 text-risk-needs border-risk-needs/40' },
-    deterministic: { label: 'Deterministic engine', cls: 'bg-ink-700 text-faint border-line' },
+    foundry: { cls: 'bg-accent-soft text-accent border-accent/40' },
+    mixed: {
+      cls: degraded
+        ? 'bg-risk-needs/10 text-risk-needs border-risk-needs/40'
+        : 'bg-accent-soft text-accent border-accent/40',
+    },
+    deterministic: { cls: 'bg-ink-700 text-faint border-line' },
   } as const;
-  const m = map[mode];
+  const m = map[trace.engine_mode];
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium ${m.cls}`}>
       <Cpu className="h-3.5 w-3.5" strokeWidth={1.75} />
-      {m.label}
+      {label}
     </span>
   );
 }
@@ -51,14 +58,7 @@ function ListenButton({ report }: { report: RiskReport }) {
   const [speaking, setSpeaking] = useState(false);
 
   const buildScript = useCallback((): string => {
-    const flags = report.red_flags.slice(0, 4);
-    const flagLine =
-      flags.length > 0
-        ? `Top red flags: ${flags.join('. ')}.`
-        : 'No specific red flags were raised.';
-    return [`Verdict: ${report.risk_level}.`, report.case_summary, flagLine]
-      .filter(Boolean)
-      .join(' ');
+    return reportNarration(report);
   }, [report]);
 
   const stop = useCallback(() => {
@@ -99,11 +99,11 @@ function ListenButton({ report }: { report: RiskReport }) {
     >
       {speaking ? (
         <>
-          <Square className="h-3.5 w-3.5" strokeWidth={1.75} /> Stop
+          <Square className="h-3.5 w-3.5" strokeWidth={1.75} /> Stop audio
         </>
       ) : (
         <>
-          <Volume2 className="h-3.5 w-3.5" strokeWidth={1.75} /> Listen
+          <Volume2 className="h-3.5 w-3.5" strokeWidth={1.75} /> Read aloud
         </>
       )}
     </button>
@@ -114,16 +114,17 @@ function Investigating() {
   const [step, setStep] = useState(0);
   const reduceMotion = useReducedMotion();
   useEffect(() => {
+    if (reduceMotion) return;
     const t = setInterval(() => setStep((s) => (s + 1) % STEPS.length), 1100);
     return () => clearInterval(t);
-  }, []);
+  }, [reduceMotion]);
   return (
     <div className="grid min-h-[340px] place-items-center">
       <div className="flex flex-col items-center gap-5 text-center">
         <Loader2 className="h-8 w-8 animate-spin text-accent" strokeWidth={1.75} />
         {reduceMotion ? (
-          <p className="font-mono text-sm text-muted" role="status" aria-live="polite">
-            Running verification…
+            <p className="font-mono text-sm text-muted" role="status" aria-live="polite">
+            Checking the evidence...
           </p>
         ) : (
           <AnimatePresence mode="wait">
@@ -259,11 +260,11 @@ export function Report() {
           <header ref={verdictRef}>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <h1 className="font-display text-2xl font-semibold tracking-tight text-white">
-                Verification report
+                What the evidence shows
               </h1>
               <div className="flex items-center gap-2.5">
                 <ListenButton report={result.report} />
-                <EngineBadge mode={result.trace.engine_mode} />
+                <EngineBadge trace={result.trace} />
               </div>
             </div>
             <VerdictCard report={result.report} />
@@ -286,8 +287,7 @@ export function Report() {
                 <div className="mb-3">
                   <EvidenceGraph graph={result.graph} height={400} />
                   <p className="mt-2 text-xs text-faint">
-                    This case’s identifiers connected to prior reports in the intelligence network.
-                    Click a node to inspect the proof.
+                    These identifiers connect to earlier reports. Select a node to inspect the proof.
                   </p>
                 </div>
               )}
@@ -334,12 +334,12 @@ export function Report() {
           {result.report.missing_evidence.length > 0 && (
             <div className="surface-2 p-4">
               <p className="mb-1.5 text-xs font-medium text-muted">
-                To sharpen this verdict, add
+                To make the verdict stronger, add
               </p>
               <ul className="space-y-1">
                 {result.report.missing_evidence.map((m, i) => (
                   <li key={i} className="text-xs text-faint">
-                    — {m}
+                    {m}
                   </li>
                 ))}
               </ul>

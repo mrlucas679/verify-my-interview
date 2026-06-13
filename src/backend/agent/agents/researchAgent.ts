@@ -21,7 +21,7 @@ export class ResearchAgent {
         engine: 'deterministic',
         toolsUsed: [],
         findings: [],
-        summary: 'Web research disabled (no SERPAPI_API_KEY); skipped OSINT pass.',
+        summary: 'Public-web research is not configured on this server, so this pass was skipped.',
       };
     }
     if (!company) {
@@ -29,7 +29,7 @@ export class ResearchAgent {
         engine: 'deterministic',
         toolsUsed: [],
         findings: [],
-        summary: 'No company name extracted; nothing to research.',
+        summary: 'No company name was found, so there was nothing reliable to search for on the public web.',
       };
     }
 
@@ -51,23 +51,23 @@ export class ResearchAgent {
       const cite = (i = 0) => data.citations?.[i] ?? 'web search';
       if (data.official_listing_found ?? data.officialListingFound) {
         findings.push({
-          claim: `An official-looking job listing exists for ${company}`,
-          evidence: `Careers/jobs result found in public search`,
+          claim: `A public job listing was found for ${company}`,
+          evidence: 'Careers or job result found in public search',
           confidence: 0.7,
           source: data.official_listing_url ?? cite(),
         });
       }
       if (data.scam_mentions ?? data.scamMentions) {
         findings.push({
-          claim: `Public scam/fraud complaints mention "${company}" recruiting`,
-          evidence: 'Search results contain scam/fraud/complaint language for this company',
+          claim: `Public complaints mention "${company}" recruiting`,
+          evidence: 'Search results contain scam, fraud, or complaint language for this company',
           confidence: 0.75,
           source: data.scam_mention_url ?? cite(),
         });
       }
       if (findings.length === 0) {
         findings.push({
-          claim: `No public scam reports surfaced for "${company}" in this pass`,
+          claim: `No public scam reports were found for "${company}" in this pass`,
           evidence: `${data.result_count ?? data.resultCount ?? 0} results reviewed`,
           confidence: 0.5,
           source: 'serpapi',
@@ -80,10 +80,10 @@ export class ResearchAgent {
       toolsUsed: reused ? [] : [call],
       findings,
       summary: call.result.success
-        ? `Searched the public web for "${company}" (${findings.length} finding(s), ${
+        ? `Searched the public web for "${company}" and found ${findings.length} relevant item${findings.length === 1 ? '' : 's'} with ${
             data?.citations?.length ?? 0
-          } citation(s)).`
-        : `Web research failed: ${call.result.error ?? 'unknown error'}.`,
+          } citation${(data?.citations?.length ?? 0) === 1 ? '' : 's'}.`
+        : `Public-web research could not complete: ${call.result.error ?? 'unknown error'}.`,
     };
   }
 }

@@ -14,7 +14,7 @@ export function Layout() {
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
           <Link
             to="/"
-            aria-label="Verify My Interview — new check"
+            aria-label="Verify My Interview - new check"
             className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             <Wordmark />
@@ -35,8 +35,8 @@ export function Layout() {
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-7 text-xs text-faint sm:flex-row">
           <Wordmark className="opacity-70" />
           <p className="text-center">
-            Synthetic demo for the Microsoft Agents League. Not financial or legal advice — always
-            verify independently.
+            Demo build for the Microsoft Agents League. Not financial or legal advice. Always
+            verify through official channels before sending money or documents.
           </p>
         </div>
       </footer>

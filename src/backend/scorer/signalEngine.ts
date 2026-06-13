@@ -65,6 +65,33 @@ function channelKind(domain: string): 'aggregator' | 'free host' | 'link shorten
   return null;
 }
 
+function hostContainsToken(domain: string, token: string): boolean {
+  return domain
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .includes(token.toLowerCase());
+}
+
+function isEmailDomain(domain: string, entities: Entities, headers?: EmailHeaderAnalysis): boolean {
+  const d = domain.toLowerCase();
+  return (
+    entities.emails.some((email) => email.toLowerCase().endsWith(`@${d}`)) ||
+    headers?.fromDomain === d ||
+    headers?.replyToDomain === d
+  );
+}
+
+function isOfficialCareersDomain(domain: string, companyName?: string): boolean {
+  const token = companyName?.toLowerCase().match(/[a-z0-9]{3,}/)?.[0];
+  if (!token) return false;
+  const d = domain.toLowerCase();
+  const labels = d.split('.');
+  const sld = labels.length >= 2 ? labels[labels.length - 2] : d;
+  const hasCareersLabel = labels.some((label) => /^(careers?|jobs?|work|talent)$/.test(label));
+  return sld === token || (hasCareersLabel && hostContainsToken(d, token));
+}
+
 function isNegatedPaymentCue(evidence: string, cue: string): boolean {
   const haystack = evidence.toLowerCase();
   const needle = cue.toLowerCase();
@@ -128,32 +155,32 @@ export function deriveSignals(
         points: 22,
         evidence: {
           source: 'email_headers',
-          detail: `From ${headers.fromDomain} but Reply-To ${headers.replyToDomain} — a classic spoofing setup`,
+          detail: `The sender uses ${headers.fromDomain}, but replies go to ${headers.replyToDomain}, a common spoofing setup`,
         },
       });
     }
     if (headers.dmarc === 'fail') {
       signals.push({
         id: 'dmarc_fail',
-        label: 'Sender identity check failed',
+        label: 'Sender could not prove the email was authentic',
         category: 'red',
         points: 15,
         evidence: {
           source: 'email_headers',
           detail:
-            'The email failed the internet’s standard proof-of-sender check — a strong sign the sender name is faked (technical: DMARC=fail)',
+            'The email failed a standard proof-of-sender check, which is a strong sign the sender name may be faked',
         },
       });
     }
     if (headers.spf === 'fail' || headers.spf === 'softfail') {
       signals.push({
         id: 'spf_fail',
-        label: 'Sent from an unauthorised server',
+        label: 'Email came from a server the domain does not approve',
         category: 'red',
         points: 10,
         evidence: {
           source: 'email_headers',
-          detail: `This email was sent from a server the domain does not authorise — common in spoofed mail (technical: SPF=${headers.spf})`,
+          detail: 'This email came from a server that the domain does not authorize, which is common in spoofed mail',
         },
       });
     }
@@ -177,12 +204,12 @@ export function deriveSignals(
     ) {
       signals.push({
         id: 'email_auth_pass',
-        label: 'Email passes sender authentication',
+        label: 'Email passes sender checks',
         category: 'positive',
         points: -8,
         evidence: {
           source: 'email_headers',
-          detail: `SPF and DMARC pass for ${headers.fromDomain}; Reply-To consistent`,
+          detail: `The sender checks pass for ${headers.fromDomain}, and replies stay on the same domain`,
         },
       });
     }
@@ -232,7 +259,7 @@ export function deriveSignals(
         id: 'credential_request',
         label: 'Sensitive details requested before hire',
         category: 'red',
-        points: 25,
+        points: 35,
         evidence: {
           source: 'detect_scam_patterns',
           detail: `Requested: ${pd.credential_requests.slice(0, 4).join(', ')}`,
@@ -252,7 +279,7 @@ export function deriveSignals(
       });
     }
     const deadlineCue = evidence.match(
-      /\b(?:expires?|expire|deadline|within|by|before)\b[^.\n]{0,35}\b(?:\d{1,2}\s*(?:hours?|hrs?|days?)|today|tonight|24\s*hours?)\b|\b(?:act|reply|respond|complete|pay|submit)\b[^.\n]{0,35}\b(?:today|tonight|now|immediately|within\s+\d{1,2}\s*(?:hours?|hrs?|days?))/i
+      /\b(?:expires?|expire|deadline|within|by|before)\b[^.\n]{0,35}\b(?:\d{1,2}\s*(?:hours?|hrs?|days?)|today|tonight|24\s*hours?)\b|\b(?:act|reply|respond|complete|pay|send|sent|submit|transfer|deposit)\b[^.\n]{0,45}\b(?:today|tonight|now|immediately|within\s+\d{1,2}\s*(?:hours?|hrs?|days?))\b/i
     );
     if (deadlineCue && !signals.some((s) => s.id === 'urgency_pressure')) {
       signals.push({
@@ -270,12 +297,12 @@ export function deriveSignals(
     if (score >= 25) {
       signals.push({
         id: 'high_keyword_score',
-        label: `Elevated scam-pattern score (${score}/100)`,
+        label: 'Message wording matches known scam patterns',
         category: 'red',
         points: Math.min(20, Math.round(score * 0.25)),
         evidence: {
           source: 'detect_scam_patterns',
-          detail: `Matched ${sp.keyword_count || 0} known scam indicators`,
+          detail: `Matched ${sp.keyword_count || 0} known scam wording indicator(s)`,
         },
       });
     }
@@ -284,6 +311,8 @@ export function deriveSignals(
   // --- Domain / DNS signals ----------------------------------------------
   const dom = data('lookup_domain_rdap');
   if (dom) {
+    const domain = typeof dom.domain === 'string' ? dom.domain.toLowerCase() : '';
+    const emailDomain = domain ? isEmailDomain(domain, entities, headers) : false;
     const age = dom.whois_data?.age_days;
     if (typeof age === 'number') {
       if (age < 90) {
@@ -312,6 +341,18 @@ export function deriveSignals(
         });
       }
     }
+    if (isOfficialCareersDomain(domain, entities.companies[0])) {
+      signals.push({
+        id: 'official_domain_match',
+        label: 'Domain matches the claimed employer',
+        category: 'positive',
+        points: -10,
+        evidence: {
+          source: 'lookup_domain_rdap',
+          detail: `${dom.domain} matches ${entities.companies[0]}'s employer/careers domain pattern`,
+        },
+      });
+    }
     if (dom.is_disposable) {
       signals.push({
         id: 'disposable_email_domain',
@@ -322,21 +363,21 @@ export function deriveSignals(
       });
     }
     const mx = dom.dns_records?.MX || [];
-    if (mx.length === 0) {
+    if (emailDomain && mx.length === 0) {
       signals.push({
         id: 'no_mx_records',
-        label: 'No mail (MX) records for domain',
+        label: 'Recruiter domain cannot receive email',
         category: 'red',
         points: 12,
-        evidence: { source: 'lookup_domain_rdap', detail: `${dom.domain} cannot receive email — unusual for a real employer` },
+        evidence: { source: 'lookup_domain_rdap', detail: `${dom.domain} has no mail records, which is unusual for a real employer` },
       });
-    } else {
+    } else if (emailDomain) {
       signals.push({
         id: 'has_mx',
-        label: 'Domain has valid mail records',
+        label: 'Domain can receive email',
         category: 'positive',
         points: -5,
-        evidence: { source: 'lookup_domain_rdap', detail: `${dom.domain} has ${mx.length} MX record(s)` },
+        evidence: { source: 'lookup_domain_rdap', detail: `${dom.domain} has ${mx.length} mail record(s)` },
       });
     }
     // Real reputation verdicts (only present when email-reputation enrichment ran).
@@ -390,7 +431,7 @@ export function deriveSignals(
         points: 12,
         evidence: {
           source: 'lookup_domain_rdap',
-          detail: `Originating IP is ${flags.join(', ')} — atypical for a real employer's mail server`,
+          detail: `The sending server appears to be ${flags.join(', ')}, which is atypical for a real employer's mail server`,
         },
       });
     }
@@ -402,12 +443,12 @@ export function deriveSignals(
     if (phone.is_voip === true) {
       signals.push({
         id: 'voip_recruiter_number',
-        label: 'Recruiter contact is a VOIP number',
+        label: 'Recruiter number is internet-based',
         category: 'red',
         points: 10,
         evidence: {
           source: 'lookup_phone_intel',
-          detail: 'The only/primary contact number is a VOIP line — common for disposable scam contacts',
+          detail: 'The main contact number is internet-based, which can be easier to discard than a normal business line',
         },
       });
     }
@@ -434,12 +475,12 @@ export function deriveSignals(
       const active = String(comp.status || '').toUpperCase() === 'ACTIVE';
       signals.push({
         id: 'company_registered',
-        label: active ? 'Company registered & active' : 'Company found in registry',
+        label: active ? 'Company appears registered and active' : 'Company appears in a registry',
         category: 'positive',
         points: active ? -15 : -8,
         evidence: {
           source: 'lookup_company_registry',
-          detail: `${comp.company_name} — ${comp.status || 'registered'}${comp.jurisdiction ? `, ${comp.jurisdiction}` : ''}`,
+          detail: `${comp.company_name}: ${comp.status || 'registered'}${comp.jurisdiction ? `, ${comp.jurisdiction}` : ''}`,
         },
       });
     } else {
@@ -459,7 +500,12 @@ export function deriveSignals(
   // --- Web / OSINT research signals --------------------------------------
   const research = data('research_company_web');
   if (research) {
-    if (research.scam_mentions) {
+    const scamMentions = research.scam_mentions ?? research.scamMentions;
+    const officialListing = research.official_listing_found ?? research.officialListingFound;
+    const scamUrl = research.scam_mention_url ?? research.scamMentionUrl;
+    const listingUrl = research.official_listing_url ?? research.officialListingUrl;
+
+    if (scamMentions) {
       signals.push({
         id: 'web_scam_warnings',
         label: 'Public scam warnings found online',
@@ -467,11 +513,11 @@ export function deriveSignals(
         points: 18,
         evidence: {
           source: 'research_company_web',
-          detail: `Web search surfaced scam/fraud/complaint mentions for "${entities.companies[0] || 'this company'}"${research.scam_mention_url ? ` (${research.scam_mention_url})` : ''}`,
+          detail: `Public search found scam, fraud, or complaint results that mention "${entities.companies[0] || 'this company'}"${scamUrl ? ` (${scamUrl})` : ''}`,
         },
       });
     }
-    if (research.official_listing_found) {
+    if (officialListing) {
       signals.push({
         id: 'official_listing',
         label: 'Official job listing found online',
@@ -479,7 +525,7 @@ export function deriveSignals(
         points: -10,
         evidence: {
           source: 'research_company_web',
-          detail: `A matching official careers/job listing was found${research.official_listing_url ? ` (${research.official_listing_url})` : ''}`,
+          detail: `A matching careers/job listing was found on an official employer domain or a recognised job board${listingUrl ? ` (${listingUrl})` : ''}`,
         },
       });
     }
@@ -549,7 +595,7 @@ export function deriveSignals(
       id: 'credential_request',
       label: 'Sensitive details requested before hire',
       category: 'red',
-      points: 25,
+      points: 35,
       evidence: {
         source: 'text',
         detail: `Requested before any verified hire: ${credentialCues.slice(0, 4).join(', ')}`,
@@ -599,7 +645,7 @@ export function deriveSignals(
         points: 22,
         evidence: {
           source: 'entities',
-          detail: `Claims ${entities.companies[0]} but applications go to ${flagged.d} (${flagged.kind}) — not an official employer domain`,
+          detail: `Claims ${entities.companies[0]} but applications go to ${flagged.d} (${flagged.kind}), not an official employer domain`,
         },
       });
     }
@@ -611,7 +657,12 @@ export function deriveSignals(
   // pattern list misses it. Catch spoken/narrative fee phrasing directly.
   const narrativeFee =
     /\b(?:paid|pay|paying|payment\s+of|asked\s+(?:me|us|them)?\s*(?:to\s+pay|for))\s+(?:R\s?)?\d[\d\s,.]{1,9}\s*(?:rand\b|for\b|to\b)?[^.\n]{0,30}\b(?:training|registration|onboarding|uniform|starter\s+pack|admin(?:istration)?\s+fee|equipment)/i;
-  const narrativeFeeMatch = evidence.match(narrativeFee);
+  const feeBeforeAmount =
+    /\b(?:asked\s+(?:me|us|them)?\s*(?:to\s+pay|for)|had\s+to\s+pay|needed\s+to\s+pay|must\s+pay|pay)\b[^.\n]{0,60}\b(?:training|registration|onboarding|uniform|starter\s+pack|starter\s+kit|admin(?:istration)?|equipment)\s+(?:fee|deposit|cost|payment|materials?)\b[^.\n]{0,35}\b(?:of\s*)?(?:R\s?)?\d[\d\s,.]{1,9}/i;
+  const labelledFee =
+    /\b(?:training|registration|onboarding|uniform|starter\s+pack|starter\s+kit|admin(?:istration)?|equipment)\s+(?:fee|deposit|cost|payment|materials?)\b[^.\n]{0,35}\b(?:of\s*)?(?:R\s?)?\d[\d\s,.]{1,9}/i;
+  const narrativeFeeMatch =
+    evidence.match(narrativeFee) || evidence.match(feeBeforeAmount) || evidence.match(labelledFee);
   if (narrativeFeeMatch && !isCandidatePaidBenefitContext(evidence, narrativeFeeMatch[0])) {
     signals.push({
       id: 'training_fee_narrative',
@@ -621,7 +672,7 @@ export function deriveSignals(
       evidence: {
         source: 'detect_scam_patterns',
         detail:
-          'The account describes people paying for training, registration, or equipment to get the job — legitimate employers never charge candidates',
+          'The account describes people paying for training, registration, or equipment to get the job. Legitimate employers do not charge candidates',
       },
     });
   }
@@ -646,7 +697,7 @@ export function deriveSignals(
       evidence: {
         source: 'detect_scam_patterns',
         detail:
-          'Short job text asks you to reply (e.g. "reply YES") — replying confirms your number is active and triggers the follow-up scam message',
+          'Short job text asks you to reply, such as "reply YES". Replying confirms your number is active and can trigger a follow-up scam message',
       },
     });
   }
@@ -685,7 +736,7 @@ export function deriveSignals(
       points: 8,
       evidence: {
         source: 'text',
-        detail: 'Offer/onboarding language with no interview — atypical for legitimate hiring',
+        detail: 'Offer or onboarding language appears without an interview step, which is atypical for legitimate hiring',
       },
     });
   }

@@ -24,7 +24,7 @@ Expected outcome: **Likely Scam (≥71)**, network signal citing corroborated pr
 | 0:00–0:40 | Problem: show the demo email — "would you spot it?" It has a real brand, professional tone. | Creativity, Community |
 | 0:40–1:50 | Paste into New Case → **6-agent timeline animates**: Evidence → Verification → Research → Network → Critic → Report, each with engine badge (foundry), tool calls, findings, durations. Narrate the collaboration explicitly. | Reasoning 20% |
 | 1:50–2:30 | Verdict card + signals: every red flag shows claim + evidence + confidence + source; guidance citations (FTC/FBI/BBB). Mention the Critic removed unsupported claims. | Accuracy 20%, Safety |
-| 2:30–3:30 | **The ring reveal:** click the evidence graph — domain node → wallet node → 6 prior reports impersonating *different* companies. "They rotate brand names; they reuse infrastructure." Jump to /network full graph + threat stats. | Creativity 15%, UX 15% |
+| 2:30–3:30 | **The ring reveal:** click the evidence graph — domain node → wallet node → 6 prior reports impersonating *different* companies. "They rotate brand names; they reuse infrastructure." Briefly show the network stats/API output if needed; the graph is now embedded in the report dossier. | Creativity 15%, UX 15% |
 | 3:30–4:10 | Detective chat: "Is this wallet linked to other scams?" (graph_lookup fires) → "Draft a reply to this recruiter" (safe probing email). | Reasoning, UX |
 | 4:10–4:45 | Reliability: show `GET /health` subsystem flags; rerun the same case with Azure env disabled → deterministic fallback completes; show `npm run eval` pass table. | Reliability & Safety 20% |
 | 4:45–5:00 | Architecture diagram with Foundry components highlighted; repo link. | Accuracy/Relevance |
@@ -34,7 +34,7 @@ Recording notes: 1080p+, dark OS theme, hide bookmarks bar, no emoji reactions, 
 ## Safety framing (say this, and keep it true in the UI)
 
 - "Risk assessment, not accusation" — the platform reports evidence-backed risk, never definitively labels a real organization a scam.
-- All network data in the demo is **synthetic** (banner on /network says so).
+- All network data in the demo is **synthetic**; keep that visible in the report graph/demo narration and API notes.
 - Evidence is treated as untrusted input; no PII in logs; reports carry trust levels to resist poisoning.
 
 ## Architecture diagram (Mermaid source — keep in docs/ARCHITECTURE.md and README)
@@ -59,7 +59,7 @@ flowchart TB
     X[(Azure AI Search<br/>vector index)] <--> N
     G[Entity Graph<br/>domains · phones · wallets · trust levels] <--> N
   end
-  W --> UI[Sentinel UI<br/>report · evidence graph · network page]
+  W --> UI[Sentinel UI<br/>report · evidence graph · network API]
   UI <--> D[Conversational Detective<br/>Foundry agent + graph_lookup tool]
 ```
 

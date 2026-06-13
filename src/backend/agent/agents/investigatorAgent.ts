@@ -13,6 +13,7 @@ import {
   asStringArray,
 } from '../foundryRunner';
 import { AgentToolCall, InvestigatorResult, InvestigationSignals, emptySignals } from '../types';
+import { logger } from '../../observability/logger';
 
 export interface InvestigationInput {
   evidence: string;
@@ -36,30 +37,31 @@ export class InvestigatorAgent {
   ) {}
 
   async run(input: InvestigationInput): Promise<InvestigatorResult> {
+    let fallbackReason: string | undefined;
     if (this.runner) {
       try {
         return await this.runFoundry(input);
       } catch (error) {
-        console.error(
-          `[Investigator] Foundry path failed, using deterministic: ${
-            error instanceof Error ? error.message : error
-          }`
+        fallbackReason = error instanceof Error ? error.message : String(error);
+        logger.warn(
+          `[Investigator] Foundry path failed, using deterministic: ${fallbackReason}`
         );
       }
     }
-    return this.runDeterministic(input);
+    const deterministic = await this.runDeterministic(input);
+    return fallbackReason ? { ...deterministic, fallback_reason: fallbackReason } : deterministic;
   }
 
   // --- Foundry path -----------------------------------------------------------
 
   private async runFoundry(input: InvestigationInput): Promise<InvestigatorResult> {
-    console.log('[Investigator] Running via Foundry...');
+    logger.info('[Investigator] Running via Foundry...');
     const { finalText, toolsUsed } = await this.runner!.runTurn({
       name: 'vmi-investigator',
       instructions: this.instructions(),
       userMessage: this.userMessage(input),
       tools: TOOL_SPECS,
-      toolExecutor: (toolName, args) => this.tools.execute(toolName, args),
+      toolExecutor: (toolName, args, signal) => this.tools.execute(toolName, args, signal),
     });
 
     const parsed = extractJsonObject(finalText) ?? {};
@@ -115,7 +117,7 @@ export class InvestigatorAgent {
   // --- Deterministic fallback -------------------------------------------------
 
   private async runDeterministic(input: InvestigationInput): Promise<InvestigatorResult> {
-    console.log('[Investigator] Running deterministic walk...');
+    logger.info('[Investigator] Running deterministic walk...');
     const toolsUsed: AgentToolCall[] = [];
     const signals: InvestigationSignals = emptySignals();
     const reasoning: string[] = [];
@@ -131,13 +133,15 @@ export class InvestigatorAgent {
       const companyInput = { company_name: entities.companyName };
       const result = await this.tools.execute('lookup_company_registry', companyInput);
       toolsUsed.push({ tool: 'lookup_company_registry', input: companyInput, result });
-      if (result.success) {
+      if (result.success && result.data?.registered) {
         signals.positive_signals.push('Company registered in official registry');
         if (result.data?.status === 'ACTIVE') signals.positive_signals.push('Company is active');
         reasoning.push(`Company found: ${result.data?.company_name}`);
-      } else {
+      } else if (result.success && result.data?.checked) {
         signals.red_flags.push('Company not found in official registry');
-        reasoning.push('Company not found / lookup failed');
+        reasoning.push('Company not found after registry lookup');
+      } else {
+        reasoning.push(`Company registry lookup unavailable: ${result.error ?? 'not enough data'}`);
       }
     }
 

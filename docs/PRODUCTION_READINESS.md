@@ -12,10 +12,10 @@ and operable — it does not move scoring into the model.
 
 ## Submission status (2026-06-12)
 
-All verification gates green at HEAD: backend+frontend build, eslint 0/0,
-frontend `tsc --noEmit` clean, jest **24/24**, offline evals **12/12**
-(deterministic), secret scan of the tracked tree clean, root `npm audit`
-**0 vulnerabilities**. UI is the final two-page IA (verify slot → layered
+All verification gates are represented by `npm run verify:product`: backend +
+frontend build, eslint 0 errors, frontend TypeScript check, Jest, offline evals
+**13/13** (deterministic), agent stress harness **13/13**, and production
+dependency audits for the root and frontend packages. UI is the final two-page IA (verify slot → layered
 investigation dossier) with an app-level error boundary.
 
 Accepted, documented residual risks:
@@ -24,10 +24,10 @@ Accepted, documented residual risks:
   path traversal). Production serves Vite's static build output from Express;
   the dev server never runs in production. Fixing requires a Vite major bump —
   deferred past submission.
-- Live-run items tracked in `.claude/orchestrator/PROJECT_STATE.md`: seed the
-  `scam-reports-v2` index once, restart shell so `DefaultAzureCredential`
-  finds `az`, browser check of MediaRecorder webm/opus against Fast
-  Transcription (WAV path verified live).
+- Live-run items before final submission: seed the `scam-reports-v2` index once,
+  restart shell so `DefaultAzureCredential` finds `az`, browser check of
+  MediaRecorder webm/opus against Fast Transcription (WAV path verified live),
+  record the demo video, and paste the final links into the submission form.
 
 ---
 
@@ -77,8 +77,9 @@ The reasoning agents must answer from real evidence, not training-data priors.
 
 - **[done]** Offline eval harness over `tests/test_cases/*.json` asserting risk
   band, score range, required/forbidden signals, and network match; runs in CI
-  (`tests/unit/evals.test.ts`). 11 cases incl. SA scam patterns + legitimate
-  controls. Redaction has its own unit tests.
+  (`tests/unit/evals.test.ts`). 13 cases include SA scam patterns, spoken
+  report/training-fee narrative, and legitimate controls. Redaction has its own
+  unit tests.
 - **[next]** **Precision/recall metrics**, not just pass/fail — track
   false-positive rate on the legitimate-control set explicitly (a real recruiter
   flagged as a scam is the most costly error and a defamation risk).
@@ -105,13 +106,15 @@ The reasoning agents must answer from real evidence, not training-data priors.
   the buffer is processed in memory and discarded; only the redacted transcript
   persists, through the same boundary as typed text. Design:
   [`docs/VOICE_INVESTIGATION_DESIGN.md`](VOICE_INVESTIGATION_DESIGN.md).
-- **[next]** **Voice eval determinism & TTS** — add `AZURE_SPEECH_*` to
-  `SCRUBBED_ENV` (`backend/scripts/runEvals.ts`) plus a synthetic voice-narration
-  fixture so the voice channel is proven through `/analyze` without ever calling
-  Azure (`CLAUDE.md` §3); evaluate **Azure Neural TTS** for SA-accented report
-  read-back (today it is on-device `speechSynthesis`) against the cross-border
-  data-residency questions in `docs/PRIVACY.md` §8. Opt-in **audio retention**
-  for re-analysis stays gated behind consent UX + a retention schedule.
+- **[done]** **Voice eval determinism at the pipeline boundary** —
+  `AZURE_SPEECH_*` is scrubbed in offline eval/stress runs, voice-style
+  narrative cases flow through `/analyze`, and audio magic-byte sniffing has
+  direct unit coverage for WebM/WAV/MP3/AMR plus disguised-payload rejection.
+- **[next]** **Voice product expansion** — evaluate **Azure Neural TTS** for
+  SA-accented report read-back (today it is on-device `speechSynthesis`) against
+  the cross-border data-residency questions in `docs/PRIVACY.md` §8. Opt-in
+  **audio retention** for re-analysis stays gated behind consent UX + a
+  retention schedule.
 - **[done]** PII redaction at the store/log boundary (`backend/privacy/redaction.ts`).
 - **[done]** **Data minimization at external-API ingestion** (POPIA s10): the
   verification providers deliberately discard person-level fields the upstream
@@ -176,7 +179,8 @@ The reasoning agents must answer from real evidence, not training-data priors.
 
 ## First production sprint (the [next] set, in order)
 
-1. AuthN + rate limiting + adversarial throttle on `/analyze`, `/report`, `/chat`.
+1. AuthN/AuthZ + adversarial-use throttle on `/analyze`, `/report`, `/chat`
+   (per-route rate limits and tool-call budgets already exist).
 2. Prompt Shields + default content filters on the Foundry deployment.
 3. AI Search / Foundry IQ grounding for the report & chat agents (citations).
 4. Strict output-schema validation with deterministic fallback.

@@ -1,0 +1,9 @@
+{
+  "name": "Voice report training-fee narrative (synthetic)",
+  "evidence": "I wanted to report this because I think I was scammed. The company name is Fake Identity. They said I was selected for a remote admin interview, then told me I had to pay a training fee of R6 000 before I could start. They wanted the money sent today by instant EFT and said the job would be cancelled if I waited.",
+  "expected_risk_levels": ["Suspicious", "Likely Scam"],
+  "expected_score_range": [40, 100],
+  "required_signals": ["upfront_payment_request", "training_fee_narrative", "urgency_pressure"],
+  "expect_network_match": false,
+  "notes": "Synthetic regression for spoken scam-report intake: report intent, voice-style company extraction, rand-denominated training fee, and deadline pressure must survive the transcript-to-analysis path without needing audio in offline evals."
+}

@@ -30,6 +30,7 @@ export function emptySignals(): InvestigationSignals {
 /** Output of the Investigator stage. */
 export interface InvestigatorResult {
   engine: AgentEngine;
+  fallback_reason?: string;
   reasoning: string;
   conclusion: string;
   signals: InvestigationSignals;
@@ -39,6 +40,7 @@ export interface InvestigatorResult {
 /** Output of the Verifier/Critic stage. */
 export interface VerifierResult {
   engine: AgentEngine;
+  fallback_reason?: string;
   /** Signals after removing unsupported claims. */
   signals: InvestigationSignals;
   /** Claims the critic judged unsupported by tool evidence and dropped. */
@@ -52,6 +54,7 @@ export interface VerifierResult {
 /** Output of the Report-writer stage. */
 export interface ReporterResult {
   engine: AgentEngine;
+  fallback_reason?: string;
   case_summary: string;
   recommended_next_steps: string[];
   /** Optional citations from a knowledge base (Foundry IQ), added later. */
@@ -59,7 +62,7 @@ export interface ReporterResult {
 }
 
 /** How the submitted evidence was classified by the Evidence agent. */
-export type EvidenceType = 'email' | 'chat_screenshot' | 'url' | 'text';
+export type EvidenceType = 'email' | 'chat_screenshot' | 'url' | 'report' | 'text';
 
 /** Output of the Evidence agent (stage 1). */
 export interface EvidenceAgentResult {

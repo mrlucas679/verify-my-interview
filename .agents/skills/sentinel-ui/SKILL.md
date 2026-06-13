@@ -57,4 +57,4 @@ Node radius `4 + Math.min(reportCount, 6)`. Trust ring: `corroborated`/`trusted`
 
 ## Page anatomy
 
-Every page: `Layout.tsx` shell (top nav: logo / New Case / Network), `max-w-6xl mx-auto px-6`, an `eyebrow` + `font-display` h1 header block, then content grid. Report page is a 2-column grid (`lg:grid-cols-[1fr_380px]`): report left, chat rail right.
+Every page: `Layout.tsx` shell (logo plus "New check" action outside the intake page), `max-w-6xl mx-auto px-6`, an `eyebrow` + `font-display` h1 header block, then content grid. Current public routes are `/` for the verify slot and `/report` for the investigation dossier. Report page is a 2-column grid (`lg:grid-cols-[1fr_380px]`): report left, chat rail right.

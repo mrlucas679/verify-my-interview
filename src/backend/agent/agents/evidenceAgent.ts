@@ -16,6 +16,13 @@ function classify(evidence: string, headers: EmailHeaderAnalysis): EvidenceType 
   if (headers.isRawEmail) return 'email';
   const t = evidence.trim();
   if (/^https?:\/\/\S+$/i.test(t)) return 'url';
+  if (
+    /\b(?:i\s+(?:want|wanted|need)\s+to\s+report|i(?:'|’)?m\s+reporting|report(?:ing|ed)?\s+(?:this|a\s+scam)|i\s+(?:got|was)\s+scammed)\b/i.test(
+      t
+    )
+  ) {
+    return 'report';
+  }
   if (/\b(\d{1,2}:\d{2}\s?(AM|PM)?)\b.*\n.*\b\d{1,2}:\d{2}/is.test(t) || /whatsapp|telegram/i.test(t)) {
     return 'chat_screenshot';
   }
@@ -60,7 +67,7 @@ export class EvidenceAgent {
       evidenceType,
       headers,
       findings,
-      summary: `Read the submission as ${evidenceType.replace('_', ' ')} and found ${
+      summary: `Read this as ${evidenceType.replace('_', ' ')} evidence and found ${
         counts || 'nothing checkable — no email address, link, company name, or phone number'
       }${headers.isRawEmail ? '; the full email routing headers were present and examined' : ''
       }.`,
@@ -74,15 +81,15 @@ export class EvidenceAgent {
   ): Finding[] {
     const findings: Finding[] = [
       {
-        claim: `Evidence classified as ${evidenceType.replace('_', ' ')}`,
-        evidence: 'Structural analysis of the submitted content',
+        claim: `This looks like ${evidenceType.replace('_', ' ')} evidence`,
+        evidence: 'The structure of the submitted text was reviewed',
         confidence: 0.9,
         source: 'parser',
       },
     ];
     if (entities.emails.length || entities.domains.length) {
       findings.push({
-        claim: `Identified ${entities.emails.length} email address(es) and ${entities.domains.length} domain(s) to verify`,
+        claim: `Found ${entities.emails.length} email address(es) and ${entities.domains.length} domain(s) to check`,
         evidence: [...entities.emails, ...entities.domains].slice(0, 5).join(', '),
         confidence: 0.95,
         source: 'parser',
@@ -90,14 +97,14 @@ export class EvidenceAgent {
     }
     if (headers.isRawEmail) {
       findings.push({
-        claim: 'Full email headers present and parsed',
+          claim: 'Full email routing headers were included',
         evidence: `From ${headers.fromAddress ?? 'unknown'}${headers.replyToAddress ? `, Reply-To ${headers.replyToAddress}` : ''}${headers.senderIp ? `, origin IP ${headers.senderIp}` : ''}`,
         confidence: 0.95,
         source: 'email_headers',
       });
       if (headers.replyToMismatch) {
         findings.push({
-          claim: 'Reply-To routes replies to a different domain than the sender',
+          claim: 'Replies go to a different domain than the sender used',
           evidence: `From domain ${headers.fromDomain} vs Reply-To domain ${headers.replyToDomain}`,
           confidence: 0.95,
           source: 'email_headers',
@@ -110,8 +117,8 @@ export class EvidenceAgent {
       ] as const) {
         if (value === 'fail' || value === 'softfail') {
           findings.push({
-            claim: `${mech} authentication failed for the sending domain`,
-            evidence: `Authentication-Results: ${mech.toLowerCase()}=${value}`,
+            claim: `The sender failed ${mech}, an email proof-of-sender check`,
+            evidence: `Header result: ${mech.toLowerCase()}=${value}`,
             confidence: 0.9,
             source: 'email_headers',
           });
@@ -120,7 +127,7 @@ export class EvidenceAgent {
     }
     if (entities.money_requests.length) {
       findings.push({
-        claim: 'Evidence contains payment/fee language',
+        claim: 'The message mentions a payment or fee',
         evidence: entities.money_requests.slice(0, 4).join(', '),
         confidence: 0.85,
         source: 'parser',

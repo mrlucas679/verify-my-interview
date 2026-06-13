@@ -1,13 +1,15 @@
 import { motion } from 'framer-motion';
 import type { StructuredSignal } from '../lib/types';
+import { proofSourceLabel } from '../lib/communication';
 
 /** Evidence-grounded findings — every signal shows the proof and its score weight. */
 export function Findings({ signals }: { signals: StructuredSignal[] }) {
   if (!signals.length) {
     return (
       <p className="surface-2 p-4 text-sm text-faint">
-        No signals derived. Provide a fuller email (sender address, links, any payment request) for
-        a stronger investigation.
+        There was not enough detail to support a clear finding. Add the sender address,
+        company name, link, phone number, or payment request so the investigation has
+        something concrete to check.
       </p>
     );
   }
@@ -37,7 +39,7 @@ export function Findings({ signals }: { signals: StructuredSignal[] }) {
               <p className="mt-1 text-xs leading-relaxed text-muted">{s.evidence.detail}</p>
             </div>
             <span className="shrink-0 rounded-md bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-faint">
-              {s.evidence.source}
+              {proofSourceLabel(s.evidence.source)}
             </span>
           </motion.div>
         );

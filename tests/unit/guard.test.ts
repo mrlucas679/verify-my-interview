@@ -5,6 +5,7 @@ import {
   cleanString,
   cleanStringArray,
   sanitizeHttpUrl,
+  sniffAudioType,
   sniffUploadType,
   rateLimitAllow,
   resetRateLimits,
@@ -61,6 +62,25 @@ describe('sniffUploadType (magic bytes, not client MIME)', () => {
     expect(sniffUploadType(Buffer.from('<!DOCTYPE html><script>', 'latin1'))).toBeNull();
     expect(sniffUploadType(Buffer.from('MZ\x90\x00', 'latin1'))).toBeNull();
     expect(sniffUploadType(Buffer.from([0x00, 0x01, 0x02]))).toBeNull();
+  });
+});
+
+describe('sniffAudioType (voice upload magic bytes)', () => {
+  it('detects supported browser and mobile voice formats', () => {
+    const webm = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42]);
+    const wav = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVEfmt ')]);
+    const mp3 = Buffer.from('ID3\x04\x00\x00', 'latin1');
+    const amr = Buffer.from('#!AMR\n\x00', 'latin1');
+
+    expect(sniffAudioType(webm)).toBe('webm');
+    expect(sniffAudioType(wav)).toBe('wav');
+    expect(sniffAudioType(mp3)).toBe('mp3');
+    expect(sniffAudioType(amr)).toBe('amr');
+  });
+
+  it('rejects disguised text/html uploads before Speech is called', () => {
+    expect(sniffAudioType(Buffer.from('<html><script>alert(1)</script>', 'latin1'))).toBeNull();
+    expect(sniffAudioType(Buffer.from([0x00, 0x01, 0x02, 0x03]))).toBeNull();
   });
 });
 

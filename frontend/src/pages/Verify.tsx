@@ -28,6 +28,7 @@ import { uploadDocument } from '../lib/api';
 import { VoiceRecorder } from '../components/VoiceRecorder';
 
 type Mode = 'message' | 'upload' | 'voice';
+const MAX_TEXT_UPLOAD_BYTES = 256 * 1024;
 
 const MODES: { id: Mode; label: string; icon: LucideIcon }[] = [
   { id: 'message', label: 'Paste message', icon: MessageSquareText },
@@ -38,9 +39,9 @@ const MODES: { id: Mode; label: string; icon: LucideIcon }[] = [
 // Three factual trust markers — no marketing claims, each maps to a real
 // capability of the pipeline (deterministic scorer, cited guidance, redaction).
 const TRUST_MARKERS: { icon: LucideIcon; label: string }[] = [
-  { icon: ScaleIcon, label: 'Deterministic risk scoring' },
-  { icon: BookCheck, label: 'Cites FTC / IC3 / BBB guidance' },
-  { icon: ShieldCheck, label: 'POPIA-safe — sensitive identifiers redacted' },
+  { icon: ScaleIcon, label: 'Score comes from evidence, not guesswork' },
+  { icon: BookCheck, label: 'Advice cites FTC, IC3, and BBB guidance' },
+  { icon: ShieldCheck, label: 'Sensitive identifiers are redacted before analysis' },
 ];
 
 // The five investigation layers, mirrored from the report page — the hero
@@ -118,7 +119,7 @@ function EvidenceChips({ entities }: { entities: DetectedEntity[] }) {
   return (
     <div className="mt-3" aria-live="polite">
       <p className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
-        Detected — the agents will verify these
+        Details found for checking
       </p>
       <div className="flex flex-wrap gap-1.5">
         {entities.map((e, i) => {
@@ -198,7 +199,7 @@ function LayerStack() {
         </div>
       </div>
       <p className="absolute bottom-0 left-0 right-0 text-center font-mono text-[10px] uppercase tracking-[0.16em] text-faint">
-        Six specialist agents · evidence stacked into a verdict
+        Evidence checked in layers before a verdict is shown
       </p>
     </div>
   );
@@ -213,9 +214,12 @@ export function Verify() {
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
   const reduceMotion = useReducedMotion();
   const { runAnalysis } = useCase();
   const navigate = useNavigate();
+
+  useEffect(() => () => uploadAbortRef.current?.abort(), []);
 
   // All three modes write the evidence string into `text`; the pipeline stays
   // unchanged (pasted link is parsed by the Evidence agent like any other text).
@@ -240,29 +244,40 @@ export function Verify() {
   }
 
   async function onFile(file: File) {
+    uploadAbortRef.current?.abort();
     setFileName(file.name);
     setFileNote(null);
     const isText = file.type.startsWith('text') || /\.(eml|txt|md)$/i.test(file.name);
     if (isText) {
+      if (file.size > MAX_TEXT_UPLOAD_BYTES) {
+        setFileNote('That text file is too large to load safely. Paste only the relevant message instead.');
+        return;
+      }
       const loaded = await file.text();
       setText(loaded);
-      setFileNote(`Loaded ${file.name} — text ready to verify.`);
+      setFileNote(`Loaded ${file.name}. The text is ready to check.`);
       return;
     }
     // PDF / image → Azure Document Intelligence OCR on the server
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
     setUploading(true);
     try {
-      const { text: extracted, pages } = await uploadDocument(file);
+      const { text: extracted, pages } = await uploadDocument(file, { signal: controller.signal });
       setText(extracted);
       setFileNote(
         extracted.trim()
-          ? `Extracted ${extracted.length} characters from ${file.name} (${pages} page${pages === 1 ? '' : 's'}) via Document Intelligence.`
-          : `No text could be extracted from ${file.name}.`
+          ? `Extracted ${extracted.length} characters from ${file.name} (${pages} page${pages === 1 ? '' : 's'}). Review the text before checking it.`
+          : `No readable text was found in ${file.name}. Try a clearer image or paste the message.`
       );
     } catch (e) {
+      if (controller.signal.aborted) return;
       setFileNote(e instanceof Error ? e.message : 'Could not process this file.');
     } finally {
-      setUploading(false);
+      if (uploadAbortRef.current === controller) {
+        uploadAbortRef.current = null;
+        setUploading(false);
+      }
     }
   }
 
@@ -281,14 +296,14 @@ export function Verify() {
         {/* Hero — copy left, stacked-dossier visual right */}
         <div className="grid items-center gap-8 lg:grid-cols-[1fr_340px]">
           <motion.header {...reveal}>
-            <span className="eyebrow">Fraud intelligence platform</span>
+            <span className="eyebrow">Job-offer safety check</span>
             <h1 className="mt-3 font-display text-3xl font-semibold leading-[1.12] tracking-tight text-white sm:text-[2.6rem]">
               Know if a job offer is real — before you reply.
             </h1>
             <p className="mt-4 max-w-xl text-sm leading-relaxed text-muted sm:text-base">
-              Six specialist agents verify the recruiter, the sending domain, and the
-              scam-network intelligence behind the message — then stack the evidence into a
-              verdict you can read, hear, and act on.
+              Paste the message, upload evidence, or tell us what happened. We check the recruiter,
+              domain, payment request, and prior scam patterns, then explain what is safe, risky,
+              or still uncertain.
             </p>
           </motion.header>
           <motion.div
@@ -405,7 +420,7 @@ export function Verify() {
                     <FileText className="h-7 w-7 text-faint" strokeWidth={1.75} />
                   )}
                   <span className="text-sm text-slate-200">
-                    {uploading ? 'Reading document…' : (fileName ?? 'Click to choose a file — or drop it here')}
+                    {uploading ? 'Reading document...' : (fileName ?? 'Click to choose a file, or drop it here')}
                   </span>
                   <span className="text-xs text-faint">.eml, .txt, PDF or screenshot</span>
                 </button>
@@ -424,7 +439,7 @@ export function Verify() {
                 {text && (
                   <div>
                     <p className="mt-2 text-xs text-faint">
-                      Extracted text is ready — run verification below.
+                      Extracted text is ready. Review it, then run the check.
                     </p>
                     <EvidenceChips entities={detected} />
                   </div>
@@ -463,7 +478,7 @@ export function Verify() {
                       className="w-full resize-y rounded-lg border border-line bg-ink-900 p-3.5 text-sm text-slate-100 placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
                     />
                     <p className="mt-2 text-xs text-faint">
-                      Review and correct the transcript above, then run verification.
+                      Review and correct the transcript above, then run the check.
                     </p>
                     <EvidenceChips entities={detected} />
                   </div>
@@ -480,7 +495,7 @@ export function Verify() {
             disabled={!canSubmit}
             className="btn-primary mt-4 w-full"
           >
-            Run verification <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
+            Check this evidence <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
           </button>
         </motion.section>
 

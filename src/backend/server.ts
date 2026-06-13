@@ -6,6 +6,7 @@
 // globally (see http/guard.ts for the threat-model notes).
 
 import 'dotenv/config';
+import { initAzureMonitor } from './observability/telemetry';
 import path from 'path';
 import { randomUUID, randomBytes } from 'crypto';
 import express, { Request, Response } from 'express';
@@ -16,11 +17,9 @@ import { AgentOrchestrator } from './agent/orchestrator';
 import { scamNetwork } from './network/scamNetwork';
 import { entityGraph } from './network/entityGraph';
 import { NetworkReport, NodeType, TrustLevel } from './network/types';
-import { getFoundrySettings, FoundryRunner } from './agent/foundryRunner';
-import { ToolOrchestrator } from './tools';
-import { ConversationalAgent, CaseContext, ChatMessage } from './agent/agents/conversationalAgent';
-import { webResearchEnabled } from './research/webResearch';
+import type { CaseContext, ChatMessage } from './agent/agents/conversationalAgent';
 import { redactAndCap, redactSensitiveIdentifiers } from './privacy/redaction';
+import { chatLocal, healthSnapshot } from './local/appTools';
 import {
   apiKeyGate,
   auditLog,
@@ -32,8 +31,10 @@ import {
   sniffAudioType,
 } from './http/guard';
 
+initAzureMonitor();
+
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.FUNCTIONS_CUSTOMHANDLER_PORT || process.env.PORT || 3000;
 
 // Behind a reverse proxy / Container Apps ingress, trust the first hop so
 // req.ip is the real client and per-IP rate limits work. Off by default.
@@ -182,7 +183,7 @@ app.post(
       const caseId = randomUUID();
       console.log(`[${caseId}] Analyzing evidence...`);
 
-      const { report, trace, signals, matches, graph } = await AgentOrchestrator.analyze(
+      const { report, trace, signals, matches, graph, multiPass } = await AgentOrchestrator.analyze(
         redactedEvidence,
         caseId
       );
@@ -193,7 +194,8 @@ app.post(
         trace,
         signals,
         matches,
-        graph
+        graph,
+        multiPass
       });
     } catch (error) {
       console.error('Error analyzing evidence:', error);
@@ -256,10 +258,7 @@ app.post(
             'Invalid chat payload: caseContext (object) and messages (1-40 of {role: "user"|"assistant", content: string}) are required.',
         });
       }
-      const settings = getFoundrySettings();
-      const runner = settings.enabled ? new FoundryRunner(settings) : null;
-      const agent = new ConversationalAgent(runner, new ToolOrchestrator());
-      const { reply, engine } = await agent.run(parsed.ctx, parsed.messages.slice(-12));
+      const { reply, engine } = await chatLocal(parsed.ctx, parsed.messages.slice(-12));
       res.json({ reply, engine });
     } catch (error) {
       console.error('Chat error:', error);
@@ -383,18 +382,7 @@ app.get(
  * Health check with per-subsystem status — every capability degrades gracefully.
  */
 app.get('/health', (req: Request, res: Response) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    subsystems: {
-      foundry_agents: getFoundrySettings().enabled,
-      scam_network_index: scamNetwork.enabled,
-      entity_graph: true, // in-memory; always available (seed-backed fallback)
-      document_ocr: ocrEnabled(),
-      voice_transcription: speechEnabled(),
-      web_research: webResearchEnabled(),
-    }
-  });
+  res.json(healthSnapshot());
 });
 
 /**

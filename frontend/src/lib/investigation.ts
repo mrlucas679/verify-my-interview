@@ -17,6 +17,8 @@ export interface InvestigationLayer {
   role: string;
   /** Whichever backend stage drives the duration chip / engine for this layer. */
   engine: StageTrace['engine'] | null;
+  /** True when a Foundry-capable stage fell back to the deterministic path. */
+  fallbackReason?: string;
   durationMs: number;
   /** One flowing paragraph, <= MAX_SENTENCES sentences. */
   paragraph: string;
@@ -40,19 +42,19 @@ const LAYER_META: Record<LayerId, { title: string; role: string }> = {
   },
   verification: {
     title: 'Verification',
-    role: 'Checks the company, the domain, and known scam patterns against live tools.',
+    role: 'Checks the company, domain, phone, and message patterns where possible.',
   },
   research: {
     title: 'Research',
-    role: 'Looks for independent corroboration on the public web.',
+    role: 'Looks for public evidence that supports or contradicts the offer.',
   },
   network: {
     title: 'Network',
-    role: 'Cross-references the identifiers against the scam-intelligence graph.',
+    role: 'Compares identifiers with earlier reports and known scam infrastructure.',
   },
   adjudication: {
-    title: 'Adjudication',
-    role: 'Strikes anything the evidence cannot support, then composes the verdict.',
+    title: 'Verdict review',
+    role: 'Removes unsupported claims and explains the final verdict.',
   },
 };
 
@@ -124,11 +126,11 @@ function rows(stage: StageTrace | undefined): Finding[] {
 function honestSkip(id: LayerId): string {
   switch (id) {
     case 'research':
-      return 'No open-web research was needed for this case — the message carried enough verifiable signals on its own.';
+      return 'No public-web research was needed for this case. The submitted evidence already carried enough checkable signals.';
     case 'network':
-      return 'None of this case’s identifiers matched a prior report in the intelligence graph.';
+      return 'None of this case’s identifiers matched earlier reports in the intelligence network.';
     case 'verification':
-      return 'No external verification was run — the evidence had no domain, company, or contact details to check.';
+      return 'No outside checks were run because the evidence did not include a company, domain, phone number, or contact address.';
     default:
       return 'This step produced no findings for this case.';
   }
@@ -154,6 +156,7 @@ export function buildInvestigationLayers(trace: PipelineTrace): InvestigationLay
       title: meta.title,
       role: meta.role,
       engine: stage?.engine ?? null,
+      fallbackReason: stage?.fallback_reason,
       durationMs: stage?.duration_ms ?? 0,
       paragraph: paragraph || honestSkip(id),
       active,
@@ -171,6 +174,7 @@ export function buildInvestigationLayers(trace: PipelineTrace): InvestigationLay
     title: LAYER_META.adjudication.title,
     role: LAYER_META.adjudication.role,
     engine: report?.engine ?? critic?.engine ?? null,
+    fallbackReason: report?.fallback_reason ?? critic?.fallback_reason,
     durationMs: (critic?.duration_ms ?? 0) + (report?.duration_ms ?? 0),
     paragraph: adjActive
       ? composeParagraph(adjudicationSummary, adjudicationFindings)

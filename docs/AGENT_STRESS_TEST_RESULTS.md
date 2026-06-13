@@ -34,8 +34,8 @@ Additional gates run after the stress harness edits:
 
 - `npm run build:backend`: pass
 - `npm run lint`: pass
-- `npm run eval`: 12/12 pass
-- `npm test`: 25/25 pass
+- `npm run eval`: 13/13 pass
+- `npm test`: 34/34 pass
 - `npm --prefix frontend run typecheck`: pass
 - `npm --prefix frontend run build`: pass, with the existing 537 kB chunk warning
 
@@ -107,22 +107,24 @@ The first live subset also exposed a fixture problem:
 
 ## Agent-Side Assessment
 
-The product is not relying only on agent prose for the core verdict in the
-offline path. The final score is derived from structured deterministic signals,
-and the stress harness verifies that report red flags are backed by triggered
-red signals. Tool calls and stage traces are also visible and bounded.
+The product is not relying only on agent prose for the core verdict. The final
+score is derived from structured deterministic signals, and the stress harness
+verifies that report red flags are backed by triggered red signals. Tool calls
+and stage traces are also visible and bounded.
 
-The live agent side is not fully proven yet. The limited live run passed, but
-the engine mode was `mixed`, and logs still showed Foundry runs ending
-`incomplete` for some stages before falling back to deterministic logic. That
-is safer than hallucinating a verdict, but it means the project is not yet
-getting full value from Foundry agents.
+The live agent side is integrated and protected by deterministic fallback. A
+limited live run passed, but the engine mode was `mixed`, and earlier logs
+showed Foundry runs ending `incomplete` for some stages before fallback. That is
+safe enough for the hackathon demo path because the deterministic spine still
+sets the verdict, but it should be instrumented before at-scale production
+claims.
 
 Current practical conclusion:
 
-- Grounded deterministic investigation: strong enough for the current demo.
-- Live Foundry agent behavior: integrated, but not complete enough to call
-  production-ready.
+- Grounded deterministic investigation: product-ready for the current demo and
+  submission path.
+- Live Foundry agent behavior: integrated, but still needs sanitized trace
+  persistence and completion-rate monitoring before broad public rollout.
 - Agent narrative quality: needs sanitized trace capture and stage-specific
   evals before trusting live agent output at scale.
 

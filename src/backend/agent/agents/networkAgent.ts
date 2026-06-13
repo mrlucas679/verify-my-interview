@@ -55,9 +55,9 @@ export class NetworkAgent {
     const summary =
       linkedReports.length || matches.length
         ? linkedReports.length
-          ? `This case shares ${sharedEntities.length} identifier${sharedEntities.length === 1 ? '' : 's'} (domains, emails, or numbers) with ${linkedReports.length} earlier scam report${linkedReports.length === 1 ? '' : 's'} — the strongest kind of link${matches.length ? `; the wording also resembles ${matches.length} known report${matches.length === 1 ? '' : 's'}` : ''}.`
+          ? `This case shares ${sharedEntities.length} identifier${sharedEntities.length === 1 ? '' : 's'} with ${linkedReports.length} earlier scam report${linkedReports.length === 1 ? '' : 's'}${matches.length ? `, and the wording resembles ${matches.length} known report${matches.length === 1 ? '' : 's'}` : ''}.`
           : `Nothing in this case reuses known scam infrastructure, but its wording closely resembles ${matches.length} previously reported scam${matches.length === 1 ? '' : 's'}.`
-        : 'Nothing in this case matches the scam-intelligence network — no shared infrastructure and no similar wording.';
+        : 'Nothing in this case matches earlier reports in the intelligence network.';
 
     return { engine: 'deterministic', matches, graph, findings, summary };
   }
@@ -79,7 +79,7 @@ export class NetworkAgent {
       }, 'unverified');
       signals.push({
         id: 'network_infrastructure_match',
-        label: `Shares infrastructure with ${linked.length} prior reported scam${linked.length > 1 ? 's' : ''}`,
+        label: `Shares identifiers with ${linked.length} earlier scam report${linked.length > 1 ? 's' : ''}`,
         category: 'red',
         points: TRUST_POINTS[best],
         evidence: {
@@ -110,7 +110,7 @@ export class NetworkAgent {
         points,
         evidence: {
           source: 'scam_network',
-          detail: `${top.reportId} (${top.scamType}) — ${top.reasons[0]}`,
+          detail: `${top.reportId} (${top.scamType}): ${top.reasons[0]}`,
         },
       });
     }
@@ -126,7 +126,7 @@ export class NetworkAgent {
     const findings: Finding[] = [];
     if (linkedReportCount) {
       findings.push({
-        claim: `Case infrastructure appears in ${linkedReportCount} prior report(s)`,
+        claim: `This case reuses identifiers from ${linkedReportCount} earlier report(s)`,
         evidence: `Shared identifiers: ${sharedLabels.slice(0, 4).join(', ')}`,
         confidence: 0.9,
         source: 'entity_graph',
@@ -143,7 +143,7 @@ export class NetworkAgent {
     if (!findings.length) {
       findings.push({
         claim: 'No prior network reports linked to this case',
-        evidence: 'Entity-graph and vector search returned no shared identifiers or strong matches',
+        evidence: 'No shared identifiers or strong wording matches were found',
         confidence: 0.6,
         source: 'entity_graph',
       });

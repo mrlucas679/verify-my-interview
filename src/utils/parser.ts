@@ -7,6 +7,92 @@ function uniq(values: string[]): string[] {
   return Array.from(new Set(values.filter((v) => v && v.length > 0)));
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function cleanCompanyName(value: string): string {
+  return value
+    .replace(/\s+/g, ' ')
+    .replace(/\s+(?:Careers|Talent Acquisition|Recruiting|Recruitment|HR|Human Resources|Team)$/i, '')
+    .replace(/[.,;:]+$/, '')
+    .trim();
+}
+
+function titleCaseToken(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+}
+
+function companyFromDomain(domain: string): string | null {
+  const host = domain.toLowerCase().replace(/^www\./, '');
+  const parts = host.split('.').filter(Boolean);
+  if (parts.length < 2) return null;
+  const secondLevel = parts[parts.length - 2];
+  if (
+    !secondLevel ||
+    secondLevel.length < 3 ||
+    ['gmail', 'outlook', 'hotmail', 'yahoo', 'icloud', 'teams', 'linkedin'].includes(secondLevel)
+  ) {
+    return null;
+  }
+  return secondLevel
+    .split(/[-_]+/)
+    .filter((part) => part.length >= 2)
+    .map(titleCaseToken)
+    .join(' ');
+}
+
+function shouldKeepCompanyCandidate(candidate: string, source: 'contact' | 'company'): boolean {
+  const clean = cleanCompanyName(candidate);
+  if (clean.length < 3) return false;
+  if (/^(?:candidate|team|recruiter|hiring manager|hr)$/i.test(clean)) return false;
+  if (/^(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/i.test(clean)) return false;
+  if (/^(?:january|february|march|april|may|june|july|august|september|october|november|december)$/i.test(clean)) {
+    return false;
+  }
+  // A single ordinary first name after "from" is usually the recruiter/contact,
+  // not the company to research. Multi-word names and explicit company-context
+  // captures still survive.
+  if (source === 'contact' && /^[A-Z][a-z]{2,20}$/.test(clean)) return false;
+  return true;
+}
+
+const KNOWN_BRANDS = [
+  'Microsoft',
+  'Amazon',
+  'Google',
+  'Meta',
+  'Facebook',
+  'Apple',
+  'Netflix',
+  'Shopify',
+  'Stripe',
+  'PayPal',
+  'Tesla',
+  'LinkedIn',
+  'TikTok',
+  'Standard Bank',
+  'Capitec',
+  'FNB',
+  'Absa',
+  'Nedbank',
+  'Shoprite',
+  'Pick n Pay',
+  'Transnet',
+  'Eskom',
+  'Sasol',
+  'MTN',
+  'Vodacom',
+  'Contoso',
+];
+
+function knownBrandsIn(evidence: string): string[] {
+  return KNOWN_BRANDS.filter((brand) => {
+    const pattern = escapeRegExp(brand).replace(/\\ /g, '\\s+');
+    return new RegExp(`\\b${pattern}\\b`, 'i').test(evidence);
+  });
+}
+
 export class EvidenceParser {
   /**
    * Extract structured entities from unstructured evidence text
@@ -43,7 +129,12 @@ export class EvidenceParser {
     const domainsFromUrls = entities.urls
       .map((u) => this.extractDomainFromUrl(u))
       .filter((d): d is string => Boolean(d));
-    entities.domains = uniq([...domainsFromEmails, ...domainsFromUrls]);
+    const bareDomainMatches = Array.from(
+      evidence.matchAll(/\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\b/gi)
+    )
+      .filter((match) => evidence[Math.max(0, match.index ?? 0) - 1] !== '@')
+      .map((match) => match[0].toLowerCase());
+    entities.domains = uniq([...domainsFromEmails, ...domainsFromUrls, ...bareDomainMatches]);
 
     // Phone numbers (require a leading + or at least 7 digits to reduce noise).
     // IP addresses in Received headers (198.51.100.72) match the digit pattern
@@ -75,40 +166,41 @@ export class EvidenceParser {
 
     // Company names: capture phrases like "from Acme Corp" / "at Globex Inc"
     const companyMatches: string[] = [];
+    const contactAtCompanyRegex =
+      /\bfrom\s+[A-Z][a-z]{2,20}(?:\s+[A-Z][a-z]{2,20})?\s+at\s+([A-Z][A-Za-z0-9&.\- ]{1,40}?)(?=[,.\n!?]|\s+(?:for|about|regarding|with|and|but|who|which)\b|$)/g;
+    let contactAtMatch: RegExpExecArray | null;
+    while ((contactAtMatch = contactAtCompanyRegex.exec(evidence)) !== null) {
+      companyMatches.push(cleanCompanyName(contactAtMatch[1]));
+    }
+
     const companyRegex =
-      /(?:from|at|with|for|join|hired by|on behalf of)\s+([A-Z][A-Za-z0-9&.\- ]{1,40}?(?:\s(?:Inc|LLC|Ltd|Limited|Corp|Corporation|GmbH|Group|Technologies|Solutions|Labs))?)\b/g;
+      /(?:from|at|with|for|join|hired by|on behalf of|interview with|role at|position at)\s+([A-Z][A-Za-z0-9&.\- ]{1,40}?(?:\s(?:Inc|LLC|Ltd|Limited|Corp|Corporation|GmbH|Group|Technologies|Solutions|Labs|Careers))?)\b/g;
     let companyMatch: RegExpExecArray | null;
     while ((companyMatch = companyRegex.exec(evidence)) !== null) {
-      companyMatches.push(companyMatch[1].trim());
+      const prefix = companyMatch[0].slice(0, companyMatch[0].length - companyMatch[1].length).trim();
+      const source = /^from$/i.test(prefix) ? 'contact' : 'company';
+      if (shouldKeepCompanyCandidate(companyMatch[1], source)) {
+        companyMatches.push(cleanCompanyName(companyMatch[1]));
+      }
     }
 
     // Spoken/narrative phrasing: "the company name is Fake Identity",
     // "a company called Nimbus Talent" (voice transcripts use these forms).
     const namedRegex =
-      /\bcompany(?:['’]s)?\s+(?:name\s+is|called|named)\s+([A-Z][A-Za-z0-9&.\- ]{1,40}?)(?=[,.\n!?]|\s+(?:and|but|so|they|the|near|in|on|at|who|which)\b|$)/gim;
+      /\bcompany(?:['’]s)?\s+(?:name\s+is|called|named)\s+([A-Z][A-Za-z0-9&.\- ]{1,40}?)(?=[,.\n!?]|\s+(?:and|but|so|they|the|said|says|asked|told|claimed|required|near|in|on|at|who|which)\b|$)/gim;
     let namedMatch: RegExpExecArray | null;
     while ((namedMatch = namedRegex.exec(evidence)) !== null) {
-      companyMatches.push(namedMatch[1].trim());
+      companyMatches.push(cleanCompanyName(namedMatch[1]));
     }
 
     // Well-known impersonation targets count as the claimed employer wherever
-    // they appear (subject lines, "the Amazon ... position") — scammers name
-    // the brand without "at/from", so preposition patterns miss them.
-    const KNOWN_BRANDS = [
-      'Microsoft', 'Amazon', 'Google', 'Meta', 'Facebook', 'Apple', 'Netflix',
-      'Shopify', 'Stripe', 'PayPal', 'Tesla', 'LinkedIn', 'TikTok',
-      'Standard Bank', 'Capitec', 'FNB', 'Absa', 'Nedbank', 'Shoprite',
-      'Pick n Pay', 'Transnet', 'Eskom', 'Sasol', 'MTN', 'Vodacom',
-    ];
-    if (companyMatches.length === 0) {
-      for (const brand of KNOWN_BRANDS) {
-        if (new RegExp(`\\b${brand.replace(/ /g, '\\s+')}\\b`).test(evidence)) {
-          companyMatches.push(brand);
-          break; // first brand mentioned is the claimed employer
-        }
-      }
-    }
-    entities.companies = uniq(companyMatches);
+    // they appear (subject lines, "the Amazon ... position"). Keep them first:
+    // if a staffing shell and a famous employer both appear, the research pass
+    // should not stop at the shell and miss the brand being impersonated.
+    const companiesFromDomains = entities.domains
+      .map(companyFromDomain)
+      .filter((company): company is string => Boolean(company));
+    entities.companies = uniq([...knownBrandsIn(evidence), ...companiesFromDomains, ...companyMatches]);
 
     return this.sanitize(entities);
   }

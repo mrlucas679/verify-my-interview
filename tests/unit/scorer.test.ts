@@ -1,7 +1,7 @@
 // Locks the sparse-evidence behavior: resemblance to known scams must never
 // be presented as "Low Risk" (user-reported recall gap, 2026-06-11).
 
-import { scoreStructuredSignals } from '../../src/backend/scorer/deterministic_scorer';
+import { DeterministicScorer, levelFromScore, scoreStructuredSignals } from '../../src/backend/scorer/deterministic_scorer';
 import type { StructuredSignal } from '../../src/types/report';
 
 function networkMatch(points: number): StructuredSignal {
@@ -62,5 +62,56 @@ describe('scoreStructuredSignals — sparse-evidence floor', () => {
     );
     expect(score).toBeGreaterThan(65);
     expect(level).toBe('Likely Scam');
+  });
+
+  it('does not hide high-risk mechanics as inconclusive only because confidence is low', () => {
+    expect(levelFromScore(90, 0.2)).toBe('Suspicious');
+    expect(levelFromScore(0, 0.2)).toBe('Inconclusive');
+  });
+
+  it('does not label concrete scam mechanics Low Risk at the band edge', () => {
+    const mechanic: StructuredSignal = {
+      id: 'unofficial_application_channel',
+      label: 'Application routed through an unofficial channel',
+      category: 'red',
+      points: 22,
+      evidence: { source: 'entities', detail: 'Application uses a shortener' },
+    };
+    const green: StructuredSignal = {
+      id: 'established_domain',
+      label: 'Established domain',
+      category: 'positive',
+      points: -10,
+      evidence: { source: 'lookup_domain_rdap', detail: 'Domain is old' },
+    };
+
+    const { score, level } = scoreStructuredSignals([mechanic, green], 0.7);
+    expect(score).toBe(12);
+    expect(level).toBe('Needs More Verification');
+  });
+});
+
+describe('DeterministicScorer legacy adapter', () => {
+  it('does not silently return zero for legacy red signals', () => {
+    const result = DeterministicScorer.score({
+      signals: { upfront_payment_request: true, credential_request: true },
+      entities: {
+        companies: [],
+        people: [],
+        emails: [],
+        domains: [],
+        urls: [],
+        phones: [],
+        money_requests: [],
+        job_titles: [],
+      },
+      tool_results_used: ['detect_scam_patterns'],
+      verification_coverage: 0.33,
+    });
+
+    expect(result.score).toBeGreaterThan(0);
+    expect(DeterministicScorer.explainScore({ upfront_payment_request: true })).toContain(
+      'Up-front payment requested (+40)'
+    );
   });
 });

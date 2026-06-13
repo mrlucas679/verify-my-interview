@@ -1,6 +1,6 @@
 ---
 name: evidence-graph
-description: The scam-intelligence entity graph — schema, entity-resolution rules, trust-level promotion, API contract, and react-force-graph-2d rendering conventions. Use when working on src/backend/network/ (entityGraph, scamNetwork, seedData), the /network/* endpoints, the Network agent, or frontend graph components (EvidenceGraph, IntelligenceNetwork page).
+description: The scam-intelligence entity graph — schema, entity-resolution rules, trust-level promotion, API contract, and react-force-graph-2d rendering conventions. Use when working on src/backend/network/ (entityGraph, scamNetwork, seedData), the /network/* endpoints, the Network agent, or frontend graph components (EvidenceGraph embedded in the report dossier).
 ---
 
 # Evidence Graph
@@ -70,7 +70,7 @@ Trust weights network signals in the scorer: trusted/corroborated match > verifi
 
 - Colors/sizes/trust-rings per the **sentinel-ui** skill graph section. Draw labels in `nodeCanvasObject` (10px JetBrains Mono, only when zoom > 1.2 or node hovered/selected).
 - `onNodeClick` → side detail panel (report node: summary, scamType, trust badge, date; entity node: linked-report list). Never navigate away.
-- `cooldownTicks={80}`, then `zoomToFit(400, 40)`. Disable physics after settle for stability on the Network page.
+- `cooldownTicks={80}`, then `zoomToFit(400, 40)`. Disable physics after settle for stability in the embedded report graph.
 - Empty state: surface-2 panel "No network connections found for this case" — never a blank canvas.
 
 ## Seeding (the demo ring)

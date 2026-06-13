@@ -80,7 +80,7 @@ team's standard); use a smaller model only for mechanical bulk edits.
 
 ## Phase 4 — Shared project memory
 
-Maintain `.Codex/orchestrator/PROJECT_STATE.md` as the single source of truth,
+Maintain `.codex/orchestrator/PROJECT_STATE.md` as the single source of truth,
 updated after every phase: **Decisions** (with why), **Assumptions**,
 **Requirements coverage** (requirement → owning agent → status → evidence),
 **Risks & mitigations**, **Open questions**, **Agent log** (who did what,

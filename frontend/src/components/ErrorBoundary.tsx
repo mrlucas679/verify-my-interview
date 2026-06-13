@@ -27,15 +27,15 @@ export class ErrorBoundary extends Component<Props, State> {
           <AlertTriangle className="mx-auto h-7 w-7 text-risk-needs" strokeWidth={1.75} />
           <p className="mt-3 text-sm font-medium text-slate-100">Something went wrong.</p>
           <p className="mt-1.5 text-xs leading-relaxed text-muted">
-            The page hit an unexpected error. Your evidence is not stored — reload to start a
-            fresh check.
+            We could not keep this page open safely. Your evidence is not stored. Start a fresh
+            check when you are ready.
           </p>
           <button
             type="button"
             onClick={() => window.location.assign('/')}
             className="btn-primary mt-4 w-full"
           >
-            Reload
+            Start fresh
           </button>
         </div>
       </div>

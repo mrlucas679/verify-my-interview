@@ -29,6 +29,11 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/public ./public
 
+RUN chown -R node:node /app
+USER node
+
 # Container Apps / App Service inject PORT; the server reads process.env.PORT
 EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -qO- "http://127.0.0.1:${PORT:-3000}/health" >/dev/null || exit 1
+
 CMD ["node", "dist/src/backend/server.js"]

@@ -25,17 +25,17 @@ export function summarizeToolResult(tool: string, data: unknown): string {
       const whois = rec(d.whois_data);
       const parts: string[] = [];
       if (arr(dns.MX).length === 0)
-        parts.push('cannot actually receive email — replies to it go nowhere, which no real employer would allow (technical: no MX records)');
+        parts.push('cannot receive email because it has no mail records');
       if (arr(dns.A).length === 0 && arr(dns.AAAA).length === 0)
-        parts.push('has no website behind it');
+        parts.push('does not appear to have a website behind it');
       const age = whois.age_days;
       if (typeof age === 'number') {
         parts.push(
           age < 180
-            ? `was registered only ${age} day${age === 1 ? '' : 's'} ago — very young for an employer`
+            ? `was registered only ${age} day${age === 1 ? '' : 's'} ago, which is unusually new for an employer`
             : `was registered ${age} days ago`
         );
-      } else parts.push('hides or lacks a registration date');
+      } else parts.push('does not show a reliable public registration date');
       if (d.risky_tld === true) parts.push('uses a domain extension common in abuse');
       if (d.is_disposable === true) parts.push('belongs to a throwaway-email service');
       return `The domain ${domain} ${parts.slice(0, 3).join('; it ')}.`;
@@ -44,29 +44,29 @@ export function summarizeToolResult(tool: string, data: unknown): string {
       const n = typeof d.keyword_count === 'number' ? d.keyword_count : 0;
       const found = arr(d.found_keywords).map(str).filter(Boolean).slice(0, 4);
       return n > 0
-        ? `Found ${n} known scam phrase${n === 1 ? '' : 's'} in the message (e.g. ${found.join(', ')}).`
-        : 'No known scam phrases (payment demands, urgency, credential requests) in the message text itself.';
+        ? `The message contains ${n} phrase${n === 1 ? '' : 's'} commonly seen in job scams, including ${found.join(', ')}.`
+        : 'The wording did not contain common scam phrases such as payment demands, pressure, or credential requests.';
     }
     case 'lookup_company_registry': {
       const name = str(d.company_name) || str(d.name) || 'The company';
       if (d.registered === true || str(d.status).toLowerCase() === 'active') {
-        return `${name} appears in the company registry${str(d.jurisdiction) ? ` (${str(d.jurisdiction)})` : ''}.`;
+        return `${name} appears in an official company registry${str(d.jurisdiction) ? ` (${str(d.jurisdiction)})` : ''}.`;
       }
-      return `${name} could not be confirmed in official company registries.`;
+      return `${name} was not confirmed in the company registry checks available to this investigation.`;
     }
     case 'lookup_phone_intel': {
       const parts: string[] = [];
       if (d.valid === false) parts.push('the number is not a valid phone number');
-      if (str(d.type).toLowerCase() === 'voip') parts.push('it is a VOIP (internet) line, not a fixed or mobile number');
+      if (str(d.type).toLowerCase() === 'voip') parts.push('it is an internet-based phone line, which can be harder to trace');
       if (str(d.carrier)) parts.push(`carrier: ${str(d.carrier)}`);
       if (str(d.country)) parts.push(`registered in ${str(d.country)}`);
-      return parts.length ? `Phone check: ${parts.slice(0, 3).join('; ')}.` : 'Phone number checked; nothing notable returned.';
+      return parts.length ? `Phone check: ${parts.slice(0, 3).join('; ')}.` : 'The phone check did not return a clear warning sign.';
     }
     case 'research_company_web': {
       const n = arr(d.results).length || (typeof d.result_count === 'number' ? d.result_count : 0);
       return n > 0
-        ? `Public web search returned ${n} relevant result${n === 1 ? '' : 's'} (details below).`
-        : 'Public web search found no independent mentions.';
+        ? `Public web search found ${n} relevant result${n === 1 ? '' : 's'} for review.`
+        : 'Public web search did not find independent mentions for this company or offer.';
     }
     default: {
       // Generic fallback: surface up to 3 primitive facts, never raw JSON.
@@ -74,7 +74,7 @@ export function summarizeToolResult(tool: string, data: unknown): string {
         .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v))
         .slice(0, 3)
         .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${String(v)}`);
-      return facts.length ? `${facts.join('; ')}.` : 'Check completed; see trace for details.';
+      return facts.length ? `${facts.join('; ')}.` : 'The check completed, but did not return a user-facing finding.';
     }
   }
 }

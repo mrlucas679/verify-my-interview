@@ -16,7 +16,7 @@ optimizes `train.py` against val_bpb in 5-minute runs; here we optimize a
 
 0. **Charter (human direction).** Write the question + decision it informs +
    evidence bar into the run's research note FIRST:
-   `.Codex/orchestrator/research/<topic>.md`. One question per note — like
+   `.codex/orchestrator/research/<topic>.md`. One question per note — like
    `program.md`, it is re-read at every iteration; scope creep dies here.
 1. **Iterate (max 3 rounds, ~5 tool calls each).** Pick the strongest source
    tier available, broad→specific:

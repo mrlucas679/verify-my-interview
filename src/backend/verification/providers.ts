@@ -102,10 +102,6 @@ export interface EmailReputation {
   totalBreaches?: number;
 }
 
-export function emailReputationEnabled(): boolean {
-  return Boolean(process.env.ABSTRACT_EMAIL_REPUTATION_KEY);
-}
-
 /** Abstract Email Reputation API. Person-name fields are intentionally discarded. */
 export async function emailReputation(email: string): Promise<EmailReputation | null> {
   const key = process.env.ABSTRACT_EMAIL_REPUTATION_KEY;
@@ -201,10 +197,6 @@ export interface CompanyEnrichment {
   industry?: string;
 }
 
-export function companyEnrichmentEnabled(): boolean {
-  return Boolean(process.env.ABSTRACT_COMPANY_KEY);
-}
-
 /** Abstract Company Enrichment API — keyed on a domain. */
 export async function companyEnrichment(domain: string): Promise<CompanyEnrichment | null> {
   const key = process.env.ABSTRACT_COMPANY_KEY;
@@ -239,10 +231,6 @@ export interface IpIntel {
   isAbuse?: boolean;
   country?: string;
   asnName?: string;
-}
-
-export function ipIntelEnabled(): boolean {
-  return Boolean(process.env.ABSTRACT_IP_KEY);
 }
 
 /** Abstract IP Intelligence API — used on an email's originating (Received:) IP. */

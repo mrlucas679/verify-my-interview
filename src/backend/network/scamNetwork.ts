@@ -10,9 +10,23 @@ import { Entities } from '../../types/entities';
 import { NetworkReport, NetworkMatch } from './types';
 import { embed, embeddingsEnabled } from './embeddings';
 
+const SEARCH_TIMEOUT_MS = 10_000;
+const MAX_GRAPH_REPORTS = 5_000;
+
 interface IndexedReport extends NetworkReport {
   id: string;
   descriptionVector?: number[];
+}
+
+function timeoutSignal(ms: number): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`Search operation exceeded ${ms}ms`)), ms);
+  timer.unref?.();
+  return controller.signal;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export class ScamNetworkService {
@@ -98,7 +112,9 @@ export class ScamNetworkService {
       docs.push(this.toDoc(r, descriptionVector));
     }
     for (let i = 0; i < docs.length; i += 50) {
-      await client.mergeOrUploadDocuments(docs.slice(i, i + 50));
+      await client.mergeOrUploadDocuments(docs.slice(i, i + 50), {
+        abortSignal: timeoutSignal(SEARCH_TIMEOUT_MS),
+      });
     }
     return docs.length;
   }
@@ -107,7 +123,24 @@ export class ScamNetworkService {
     if (!this.enabled) return;
     const client = this.searchClient();
     const descriptionVector = await embed(this.embedText(report));
-    await client.mergeOrUploadDocuments([this.toDoc(report, descriptionVector)]);
+    await client.mergeOrUploadDocuments([this.toDoc(report, descriptionVector)], {
+      abortSignal: timeoutSignal(SEARCH_TIMEOUT_MS),
+    });
+  }
+
+  async waitForReport(reportId: string, maxWaitMs = 2_500): Promise<boolean> {
+    if (!this.enabled) return false;
+    const client = this.searchClient();
+    const deadline = Date.now() + maxWaitMs;
+    while (Date.now() < deadline) {
+      try {
+        await client.getDocument(reportId, { abortSignal: timeoutSignal(2_000) });
+        return true;
+      } catch {
+        await wait(250);
+      }
+    }
+    return false;
   }
 
   /** Page through every report (no vectors) — feeds the entity-graph builder. */
@@ -130,10 +163,11 @@ export class ScamNetworkService {
         'trustLevel',
         'sourceType',
       ],
-      top: 1000,
+      abortSignal: timeoutSignal(SEARCH_TIMEOUT_MS),
     } as any);
     const reports: NetworkReport[] = [];
     for await (const r of response.results) {
+      if (reports.length >= MAX_GRAPH_REPORTS) break;
       const d = r.document as IndexedReport;
       reports.push({
         reportId: d.reportId,
@@ -180,6 +214,7 @@ export class ScamNetworkService {
           'trustLevel',
         ],
         top: k,
+        abortSignal: timeoutSignal(SEARCH_TIMEOUT_MS),
       } as any);
 
       const matches: NetworkMatch[] = [];

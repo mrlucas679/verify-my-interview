@@ -15,7 +15,7 @@ deterministic scoring + scam-intelligence graph + Sentinel dark UI.
    cleanly when unconfigured. `GET /health` reports each subsystem.
 3. **Offline evals must stay deterministic.** Any NEW external call's env vars
    go into `SCRUBBED_ENV` in `src/backend/scripts/runEvals.ts`. Gate: `npm run
-   eval` ⇒ **11/11** (plus any cases you add).
+   eval` ⇒ **13/13** (plus any cases you add).
 4. **Privacy (POPIA) by design.** Untrusted text is redacted at boundaries
    (`src/backend/privacy/redaction.ts` — SA IDs, bank/card numbers stripped;
    scam IOCs kept). Provider responses are data-minimized (no person names).
@@ -27,7 +27,7 @@ deterministic scoring + scam-intelligence graph + Sentinel dark UI.
    docs, tests, commits, or sub-agent prompts. `.env.example` documents names.
 7. **Never auto-start servers** (user preference) — build/tests/evals are the
    verification path; ask before any live server run.
-8. **Frontend = Sentinel design system** (`.Codex/skills/sentinel-ui/SKILL.md`):
+8. **Frontend = Sentinel design system** (`.agents/skills/sentinel-ui/SKILL.md`):
    dark security-SaaS, tokens like `surface`, `btn-primary`, `text-muted`,
    `ink-*`, `accent`; lucide-react icons; framer-motion; React escapes by
    default — never `dangerouslySetInnerHTML`.
@@ -64,7 +64,8 @@ Apply to ALL new/modified code; reviewers reject violations:
 npm run build     # tsc backend + vite frontend
 npm run lint      # eslint (0 errors)
 npm test          # jest: unit + offline eval suites
-npm run eval      # 11/11 offline, deterministic
+npm run eval      # 13/13 offline, deterministic
+npm run verify:product # build/lint/frontend typecheck/test/eval/stress/prod-audit gate
 git grep of real key fragments ⇒ empty
 ```
 
@@ -92,7 +93,7 @@ covers it — and USE it automatically when relevant. Skills = instructions,
 hooks = guardrails, MCP/CLI connections = abilities. Generic skills from other
 projects (design, research, docs, deploy packs) are raw material: adapt their
 rules to THIS app rather than ignoring them or following them blindly. When a
-needed capability has no skill yet, consider writing one in `.Codex/skills/`
+needed capability has no skill yet, consider writing one in `.codex/skills/`
 so the next session inherits it. Sub-agent briefings must point at this section
 so every future agent session knows the toolbox without being told.
 
@@ -111,7 +112,7 @@ Playwright MCP / Codex Preview / Chrome tools (drive + screenshot the UI);
 Higgsfield MCP (AI video/image generation — demo-video assets); GitHub via
 `gh` CLI.
 
-**Hooks (guardrails):** configured in `.Codex/settings.json` if present —
+**Hooks (guardrails):** configured in `.codex/settings.json` if present —
 they intercept tool calls; treat hook output as user feedback, don't fight it.
 
 ## Current state (2026-06-12)
@@ -123,11 +124,12 @@ Investigation (Azure Speech verified LIVE, en-ZA), reply-bait smishing signal,
 semantic-match scaling + inconclusive floor, humanized findings, and the FINAL
 two-page UI: `/` verify slot (3D layer-stack hero, live entity chips,
 drag-drop) → `/report` stacked investigation dossier (sticky verdict bar,
-error boundary). Gates: lint 0/0, jest 24/24, evals 12/12, root audit 0,
+error boundary). Gates: `npm run verify:product` passed on 2026-06-12
+(build, lint 0/0, frontend typecheck, jest 34/34, evals 13/13, stress 13/13, production audits 0),
 secret scan clean. Frontend dev-only esbuild/vite advisories accepted (see
 PRODUCTION_READINESS §Submission status).
 Open: user-run `npm run seed:network` (v2 index), fresh-terminal `npm start`
 (Foundry creds), browser webm/opus check, demo video, submission packaging.
 
-Orchestration state lives in `.Codex/orchestrator/PROJECT_STATE.md`
+Orchestration state lives in `.codex/orchestrator/PROJECT_STATE.md`
 (decisions D1–D4, requirements coverage, risks) — read it before resuming work.

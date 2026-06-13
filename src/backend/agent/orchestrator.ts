@@ -23,6 +23,9 @@ import { deriveSignals, coverage } from '../scorer/signalEngine';
 import { scoreStructuredSignals, levelFromScore } from '../scorer/deterministic_scorer';
 import { matchGuidance } from '../knowledge/guidance';
 import { EntityGraph, NetworkMatch } from '../network/types';
+import { MultiPassResult, runMultiPassAdjudication } from './multiPass';
+import { analysisResultAttributes, withTelemetrySpan } from '../observability/telemetry';
+import { logger } from '../observability/logger';
 
 export type StageName = 'evidence' | 'verification' | 'research' | 'network' | 'critic' | 'report';
 
@@ -30,6 +33,7 @@ export interface StageTrace {
   stage: StageName;
   engine: AgentEngine;
   summary: string;
+  fallback_reason?: string;
   duration_ms: number;
   findings: Finding[];
 }
@@ -42,6 +46,7 @@ export interface PipelineTrace {
   investigator_reasoning: string;
   critique: string;
   removed_claims: string[];
+  degraded_stages: Array<{ stage: StageName; reason: string }>;
 }
 
 export interface AnalysisResult {
@@ -50,32 +55,94 @@ export interface AnalysisResult {
   signals: StructuredSignal[];
   matches: NetworkMatch[];
   graph: EntityGraph;
+  multiPass: MultiPassResult;
 }
 
 /** Time a stage and wrap its result in a StageTrace. */
 async function staged<T>(
   stage: StageName,
   run: () => Promise<T>,
-  describe: (result: T) => { engine: AgentEngine; summary: string; findings: Finding[] }
+  describe: (result: T) => {
+    engine: AgentEngine;
+    summary: string;
+    findings: Finding[];
+    fallback_reason?: string;
+  }
 ): Promise<{ result: T; trace: StageTrace }> {
   const started = Date.now();
   const result = await run();
-  const { engine, summary, findings } = describe(result);
+  const { engine, summary, findings, fallback_reason } = describe(result);
   return {
     result,
-    trace: { stage, engine, summary, findings, duration_ms: Date.now() - started },
+    trace: {
+      stage,
+      engine,
+      summary,
+      fallback_reason,
+      findings,
+      duration_ms: Date.now() - started,
+    },
   };
+}
+
+function clampConfidence(value: number, cap = 0.95): number {
+  return Math.max(0, Math.min(cap, value));
+}
+
+function calibratedConfidence(
+  baseConfidence: number,
+  criticAdjustment: number,
+  signals: StructuredSignal[],
+  removedClaimCount: number
+): number {
+  const hasRed = signals.some((s) => s.category === 'red');
+  const hasPositive = signals.some((s) => s.category === 'positive');
+  const semanticOnly = signals.length > 0 && signals.every((s) => s.id === 'network_match');
+
+  let adjustment = Math.max(-0.4, Math.min(0.15, criticAdjustment));
+  if (removedClaimCount > 0) adjustment -= Math.min(0.25, removedClaimCount * 0.08);
+  if (hasRed && hasPositive) adjustment -= 0.1;
+  if (semanticOnly) adjustment -= 0.2;
+  if (signals.length === 0) adjustment -= 0.15;
+
+  const cap = hasRed && hasPositive ? 0.85 : semanticOnly ? 0.65 : 0.95;
+  return clampConfidence(baseConfidence + adjustment, cap);
+}
+
+function toolDisplayName(tool: string): string {
+  switch (tool) {
+    case 'lookup_company_registry':
+      return 'company registry';
+    case 'lookup_domain_rdap':
+      return 'domain and email records';
+    case 'lookup_phone_intel':
+      return 'phone reputation';
+    case 'detect_scam_patterns':
+      return 'message pattern check';
+    case 'research_company_web':
+      return 'public web search';
+    default:
+      return tool.replace(/_/g, ' ');
+  }
 }
 
 export class AgentOrchestrator {
   static async analyze(evidence: string, caseId: string): Promise<AnalysisResult> {
-    console.log(`[Agent] Starting analysis for case ${caseId}`);
+    return withTelemetrySpan('vmi.analysis', { 'vmi.case_id': caseId }, async (span) => {
+      const result = await AgentOrchestrator.analyzeInternal(evidence, caseId);
+      span.setAttributes(analysisResultAttributes(result));
+      return result;
+    });
+  }
+
+  private static async analyzeInternal(evidence: string, caseId: string): Promise<AnalysisResult> {
+    logger.info(`[Agent] Starting analysis for case ${caseId}`);
 
     const settings = getFoundrySettings();
     const runner = settings.enabled ? new FoundryRunner(settings) : null;
     const tools = new ToolOrchestrator();
     if (!runner) {
-      console.log('[Agent] No Foundry endpoint configured; pipeline runs deterministically.');
+      logger.info('[Agent] No Foundry endpoint configured; pipeline runs deterministically.');
     }
 
     const stages: StageTrace[] = [];
@@ -89,8 +156,11 @@ export class AgentOrchestrator {
     stages.push(ev.trace);
     const entities = ev.result.entities;
 
-    // 2. VERIFICATION — registry/RDAP/pattern tools, Foundry-planned when available.
-    const investigator = new InvestigatorAgent(runner, tools);
+    // 2. VERIFICATION — registry/RDAP/pattern tools. This stage is deliberately
+    // deterministic: entity extraction already tells us which identifiers need
+    // checking, and routing through Foundry can add seconds before falling back
+    // to the same tool checks in production.
+    const investigator = new InvestigatorAgent(null, tools);
     const input: InvestigationInput = {
       evidence,
       companyName: entities.companies[0],
@@ -104,12 +174,13 @@ export class AgentOrchestrator {
       () => investigator.run(input),
       (r) => ({
         engine: r.engine,
-        summary: `Ran ${r.toolsUsed.length} independent check${r.toolsUsed.length === 1 ? '' : 's'} on the identifiers. ${r.conclusion}`,
+        fallback_reason: r.fallback_reason,
+        summary: `Checked ${r.toolsUsed.length} identifier${r.toolsUsed.length === 1 ? '' : 's'} from the evidence. ${r.conclusion}`,
         findings: r.toolsUsed
           .filter((t) => t.result.success)
           .slice(0, 6)
           .map((t) => ({
-            claim: `Verified via ${t.tool}`,
+            claim: `Checked ${toolDisplayName(t.tool)}`,
             // Plain English for the report; raw JSON stays in the dev trace.
             evidence: summarizeToolResult(t.tool, t.result.data).slice(0, 220),
             confidence: 0.85,
@@ -151,6 +222,7 @@ export class AgentOrchestrator {
       () => new VerifierAgent(runner).run(evidence, investigation),
       (r) => ({
         engine: r.engine,
+        fallback_reason: r.fallback_reason,
         summary:
           r.critique ||
           `Reviewed ${signals.length} signal(s); removed ${r.removed_claims.length} unsupported claim(s).`,
@@ -169,16 +241,24 @@ export class AgentOrchestrator {
     // no verifiable identifiers in the evidence there is nothing to conclude —
     // never let a confidence nudge turn "no evidence" into reassuring "Low Risk".
     const scored = scoreStructuredSignals(signals, cov);
-    const confidence = Math.max(0, Math.min(1, scored.confidence + verified.confidence_adjustment));
+    const confidence = calibratedConfidence(
+      scored.confidence,
+      verified.confidence_adjustment,
+      signals,
+      verified.removed_claims.length
+    );
     const nothingToVerify =
       entities.companies.length === 0 &&
       entities.emails.length === 0 &&
       entities.domains.length === 0 &&
       entities.urls.length === 0;
+    const calibratedLevel = levelFromScore(scored.score, confidence);
     const level: RiskLevel =
       signals.length === 0 && nothingToVerify
         ? 'Inconclusive'
-        : levelFromScore(scored.score, confidence);
+        : calibratedLevel === 'Low Risk' && scored.level !== 'Low Risk'
+          ? scored.level
+          : calibratedLevel;
 
     const redFlags = signals.filter((s) => s.category === 'red').map((s) => s.label);
     const positives = signals.filter((s) => s.category === 'positive').map((s) => s.label);
@@ -196,10 +276,12 @@ export class AgentOrchestrator {
           riskLevel: level,
           riskScore: scored.score,
           entities,
+          evidenceType: ev.result.evidenceType,
         }),
       (r) => ({
         engine: r.engine,
-        summary: 'Composed the final risk report from vetted, evidence-backed findings.',
+        fallback_reason: r.fallback_reason,
+        summary: 'Reviewed the supported findings and wrote the final user-facing verdict.',
         findings: signals.slice(0, 6).map((s) => ({
           claim: s.label,
           evidence: s.evidence.detail,
@@ -235,13 +317,25 @@ export class AgentOrchestrator {
       investigator_reasoning: investigation.reasoning,
       critique: verified.critique,
       removed_claims: verified.removed_claims,
+      degraded_stages: stages
+        .filter((stage) => Boolean(stage.fallback_reason))
+        .map((stage) => ({ stage: stage.stage, reason: stage.fallback_reason ?? 'unknown' })),
     };
 
-    console.log(
+    const multiPass = runMultiPassAdjudication({
+      report,
+      signals,
+      matches,
+      graph,
+      removedClaims: verified.removed_claims,
+      evidenceType: ev.result.evidenceType,
+    });
+
+    logger.info(
       `[Agent] Case ${caseId} complete — ${level} (${scored.score}/100), engine: ${trace.engine_mode}, coverage: ${Math.round(cov * 100)}%`
     );
 
-    return { report, trace, signals, matches, graph };
+    return { report, trace, signals, matches, graph, multiPass };
   }
 
   private static deriveMissingEvidence(entities: Entities, toolCount: number): string[] {

@@ -27,6 +27,7 @@ import {
   type InvestigationLayer,
   type LayerId,
 } from '../lib/investigation';
+import { proofSourceLabel, stageEngineLabel, toolLabel } from '../lib/communication';
 
 const LAYER_ICON: Record<LayerId, LucideIcon> = {
   evidence: FileSearch,
@@ -36,15 +37,20 @@ const LAYER_ICON: Record<LayerId, LucideIcon> = {
   adjudication: Gavel,
 };
 
-function EngineTag({ engine }: { engine: string }) {
-  const foundry = engine === 'foundry';
+function EngineTag({ layer }: { layer: InvestigationLayer }) {
+  const foundry = layer.engine === 'foundry' && !layer.fallbackReason;
+  const fallback = Boolean(layer.fallbackReason);
   return (
     <span
       className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
-        foundry ? 'bg-accent-soft text-accent' : 'bg-ink-700 text-faint'
+        fallback
+          ? 'bg-risk-needs/10 text-risk-needs'
+          : foundry
+            ? 'bg-accent-soft text-accent'
+            : 'bg-ink-700 text-faint'
       }`}
     >
-      {engine}
+      {stageEngineLabel(layer)}
     </span>
   );
 }
@@ -58,10 +64,10 @@ function FindingRow({ finding }: { finding: Finding }) {
       </div>
       <div className="mt-1.5 flex items-center gap-1.5">
         <span className="rounded bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] text-faint">
-          src {finding.source}
+          Proof: {proofSourceLabel(finding.source)}
         </span>
         <span className="font-mono text-[10px] text-faint">
-          conf {Math.round(finding.confidence * 100)}%
+          certainty {Math.round(finding.confidence * 100)}%
         </span>
       </div>
     </li>
@@ -78,7 +84,7 @@ function ToolChips({ trace }: { trace: PipelineTrace }) {
           className="inline-flex items-center gap-1.5 rounded-md border border-line bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-300"
         >
           <Wrench className="h-3 w-3 text-faint" strokeWidth={1.75} />
-          {t.tool}
+          {toolLabel(t.tool)}
           {t.success ? (
             <Check className="h-3 w-3 text-risk-low" strokeWidth={2} />
           ) : (
@@ -109,7 +115,7 @@ function EvidenceDetail({
           className="h-3.5 w-3.5 transition-transform group-open:rotate-90"
           strokeWidth={1.75}
         />
-        Evidence detail
+        View checked proof
       </summary>
       <div className="mt-2.5 space-y-2.5 border-l border-line/70 pl-3">
         {hasTools && <ToolChips trace={trace} />}
@@ -125,7 +131,7 @@ function EvidenceDetail({
         {hasStruck && (
           <div className="space-y-1">
             <p className="font-mono text-[10px] uppercase tracking-wide text-faint">
-              Claims struck for lack of evidence
+              Claims removed because proof was missing
             </p>
             {layer.removedClaims!.map((c) => (
               <p key={c} className="text-[11px] text-risk-scam line-through">
@@ -189,7 +195,7 @@ function LayerBlock({
         {layer.durationMs > 0 && (
           <span className="font-mono text-[10px] text-faint">{formatDuration(layer.durationMs)}</span>
         )}
-        {layer.engine && <EngineTag engine={layer.engine} />}
+        {layer.engine && <EngineTag layer={layer} />}
       </div>
       <p className="mt-1 text-xs text-faint">{layer.role}</p>
 

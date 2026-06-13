@@ -29,8 +29,8 @@ Implemented today:
 
 Latest verified state on 2026-06-12:
 
-- `npm test`: 25/25 passing.
-- `npm run eval`: 12/12 passing.
+- `npm test`: 34/34 passing.
+- `npm run eval`: 13/13 passing.
 - `npm run stress:agents`: 13/13 passing in offline deterministic mode.
 - `npm run stress:agents -- --live --limit=2`: 2/2 passing in mixed live mode.
   Foundry was exercised, but some stage runs still ended `incomplete` and used
@@ -60,12 +60,17 @@ For this project:
 - Narrative quality: summaries and next steps remain conservative, actionable,
   and evidence-backed.
 
-Immediate additions:
+Already covered:
 
 - Parser tests for voice-style phrasing such as "company called X" and
   "company name is X".
 - Parser tests proving mail relay IPs in `Received:` headers are not extracted
   as phone numbers.
+- Synthetic spoken-report eval for "I wanted to report this" + named company +
+  rand training fee.
+
+Immediate additions:
+
 - Signal tests for `training_fee_narrative`, `sms_reply_bait`,
   `unofficial_application_channel`, and "bring documents to interview" false
   positives.
