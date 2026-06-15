@@ -76,6 +76,11 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   Azure env vars and the same case still completes — the trace just says
   `deterministic` instead of `foundry`.
 
+## Demo Video and Live App
+
+You can view the Verify My Interview project demo video here: https://youtu.be/9OACXRezCKc. The live deployed application is available at https://vmi-online-3907.azurewebsites.net, and the backend API is available at https://vmi-api-3907.azurewebsites.net. To test the project, first watch the demo video to understand the problem, solution, and workflow. Then open the live app link in your browser, create or submit a verification case, and review the generated scam-risk report. The API link is provided for checking backend availability, health, and integration with the live frontend.
+
+
 ## Evals
 
 `npm run eval` runs every scenario in `tests/test_cases/` through the full
