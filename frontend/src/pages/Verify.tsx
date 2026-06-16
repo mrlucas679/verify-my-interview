@@ -20,14 +20,18 @@ import {
   Link2,
   Phone,
   Banknote,
+  Flag,
+  CheckCircle2,
+  ShieldQuestion,
   type LucideIcon,
 } from 'lucide-react';
 import { SAMPLES } from '../lib/samples';
 import { useCase } from '../store/caseStore';
-import { uploadDocument } from '../lib/api';
+import { uploadDocument, submitReport } from '../lib/api';
 import { VoiceRecorder } from '../components/VoiceRecorder';
 
 type Mode = 'message' | 'upload' | 'voice';
+type Intent = 'verify' | 'report';
 const MAX_TEXT_UPLOAD_BYTES = 256 * 1024;
 
 const MODES: { id: Mode; label: string; icon: LucideIcon }[] = [
@@ -112,6 +116,35 @@ const CHIP_ICON: Record<DetectedEntity['kind'], LucideIcon> = {
   phone: Phone,
   amount: Banknote,
 };
+
+/** Extract scam IOCs from the evidence for a community report payload. The
+ *  server re-validates and redacts; this just pre-fills the report fields. */
+function extractReportIOCs(raw: string): { emails: string[]; domains: string[]; phones: string[] } {
+  const text = raw.slice(0, SCAN_CAP);
+  const lower = (xs: string[]) => Array.from(new Set(xs.map((x) => x.toLowerCase())));
+  const emails = lower(text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) ?? []);
+  const hosts: string[] = [];
+  for (const u of text.match(/\bhttps?:\/\/[^\s<>"')]+|\bwww\.[^\s<>"')]+/gi) ?? []) {
+    try {
+      hosts.push(new URL(u.startsWith('http') ? u : `https://${u}`).hostname);
+    } catch {
+      /* skip malformed url */
+    }
+  }
+  const domains = lower([...emails.map((e) => e.split('@')[1] ?? ''), ...hosts].filter(Boolean));
+  const phones = Array.from(
+    new Set(
+      (text.match(/\+?\d[\d\s().-]{7,16}\d/g) ?? [])
+        .map((p) => p.trim())
+        .filter((p) => {
+          const d = p.replace(/\D/g, '');
+          return d.length >= 9 && d.length <= 15;
+        })
+        .filter((p) => !/^\d{1,3}(\.\d{1,3}){3}$/.test(p.replace(/\s/g, '')))
+    )
+  );
+  return { emails: emails.slice(0, 20), domains: domains.slice(0, 20), phones: phones.slice(0, 20) };
+}
 
 function EvidenceChips({ entities }: { entities: DetectedEntity[] }) {
   const reduceMotion = useReducedMotion();
@@ -206,6 +239,7 @@ function LayerStack() {
 }
 
 export function Verify() {
+  const [intent, setIntent] = useState<Intent>('verify');
   const [mode, setMode] = useState<Mode>('message');
   const [text, setText] = useState('');
   const [fileName, setFileName] = useState<string | null>(null);
@@ -213,13 +247,26 @@ export function Verify() {
   const [voiceMeta, setVoiceMeta] = useState<{ durationSec: number; locale: string } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
+  // Report-a-scam state (intent === 'report').
+  const [company, setCompany] = useState('');
+  const [location, setLocation] = useState('');
+  const [reporting, setReporting] = useState<'idle' | 'submitting' | 'done' | 'error'>('idle');
+  const [reportId, setReportId] = useState<string | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
+  const reportAbortRef = useRef<AbortController | null>(null);
   const reduceMotion = useReducedMotion();
   const { runAnalysis } = useCase();
   const navigate = useNavigate();
 
-  useEffect(() => () => uploadAbortRef.current?.abort(), []);
+  useEffect(
+    () => () => {
+      uploadAbortRef.current?.abort();
+      reportAbortRef.current?.abort();
+    },
+    []
+  );
 
   // All three modes write the evidence string into `text`; the pipeline stays
   // unchanged (pasted link is parsed by the Evidence agent like any other text).
@@ -241,6 +288,49 @@ export function Verify() {
     if (!value) return;
     void runAnalysis(value);
     navigate('/report');
+  }
+
+  const canReport = company.trim().length > 0 && evidence().length > 0 && !uploading;
+
+  async function fileReport() {
+    if (!canReport || reporting === 'submitting') return;
+    reportAbortRef.current?.abort();
+    const controller = new AbortController();
+    reportAbortRef.current = controller;
+    setReporting('submitting');
+    setReportError(null);
+    const iocs = extractReportIOCs(text);
+    try {
+      const { reportId: id } = await submitReport(
+        {
+          companyName: company.trim(),
+          description: evidence(),
+          location: location.trim() || undefined,
+          ...iocs,
+        },
+        { signal: controller.signal }
+      );
+      setReportId(id);
+      setReporting('done');
+    } catch (e) {
+      if (controller.signal.aborted) return;
+      setReportError(e instanceof Error ? e.message : 'Could not file the report.');
+      setReporting('error');
+    } finally {
+      if (reportAbortRef.current === controller) reportAbortRef.current = null;
+    }
+  }
+
+  function resetReport() {
+    setText('');
+    setCompany('');
+    setLocation('');
+    setVoiceMeta(null);
+    setFileName(null);
+    setFileNote(null);
+    setReportId(null);
+    setReporting('idle');
+    setReportError(null);
   }
 
   async function onFile(file: File) {
@@ -319,7 +409,51 @@ export function Verify() {
           </motion.div>
         </div>
 
-        {/* The single verification slot */}
+        {/* Intent toggle — verify an offer, or file a scam report for others */}
+        <div
+          role="tablist"
+          aria-label="What would you like to do?"
+          className="mx-auto mt-9 flex w-full max-w-2xl gap-2"
+        >
+          {([
+            { id: 'verify' as const, label: 'Verify an offer', sub: 'Check before you reply', icon: ShieldQuestion },
+            { id: 'report' as const, label: 'Report a scam', sub: 'Warn the next person', icon: Flag },
+          ]).map((opt) => {
+            const Icon = opt.icon;
+            const active = intent === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => {
+                  setIntent(opt.id);
+                  setReporting('idle');
+                  setReportError(null);
+                }}
+                className={`flex flex-1 items-center gap-3 rounded-xl border px-4 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                  active
+                    ? 'border-accent/60 bg-ink-800 shadow-card'
+                    : 'border-line bg-ink-900 hover:border-accent/40'
+                }`}
+              >
+                <Icon
+                  className={active ? 'h-5 w-5 text-accent' : 'h-5 w-5 text-faint'}
+                  strokeWidth={1.75}
+                />
+                <span>
+                  <span className={`block text-sm font-medium ${active ? 'text-white' : 'text-slate-200'}`}>
+                    {opt.label}
+                  </span>
+                  <span className="block text-xs text-faint">{opt.sub}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* The single verification / report slot */}
         <motion.section
           {...(reduceMotion
             ? {}
@@ -328,7 +462,7 @@ export function Verify() {
                 animate: { opacity: 1, y: 0 },
                 transition: { duration: 0.24, ease: 'easeOut' as const, delay: 0.06 },
               })}
-          aria-label="Submit evidence to verify"
+          aria-label={intent === 'verify' ? 'Submit evidence to verify' : 'Describe the scam to report'}
           onDragOver={(e) => {
             e.preventDefault();
             setDragging(true);
@@ -347,6 +481,33 @@ export function Verify() {
             dragging ? 'border-accent/70 ring-2 ring-accent/30' : ''
           }`}
         >
+          {intent === 'report' && reporting === 'done' ? (
+            <div className="py-6 text-center">
+              <CheckCircle2 className="mx-auto h-9 w-9 text-risk-low" strokeWidth={1.75} />
+              <p className="mt-3 text-sm font-medium text-slate-100">Report filed — thank you.</p>
+              <p className="mx-auto mt-1.5 max-w-md text-xs leading-relaxed text-muted">
+                Your report{reportId ? ` (${reportId})` : ''} is now part of the scam-intelligence
+                network. The next person who checks this recruiter’s email, domain, or number will
+                see the match.
+              </p>
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                <button type="button" onClick={resetReport} className="btn-ghost">
+                  Report another
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIntent('verify');
+                    setReporting('idle');
+                  }}
+                  className="btn-primary"
+                >
+                  Verify an offer
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
           {/* Mode selector — segmented pills */}
           <div
             role="tablist"
@@ -489,14 +650,71 @@ export function Verify() {
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!canSubmit}
-            className="btn-primary mt-4 w-full"
-          >
-            Check this evidence <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
-          </button>
+          {intent === 'report' && (
+            <div className="mt-4 space-y-3">
+              <div>
+                <label htmlFor="report-company" className="mb-1.5 block text-xs font-medium text-muted">
+                  Company or brand they claimed to be <span className="text-risk-scam">*</span>
+                </label>
+                <input
+                  id="report-company"
+                  type="text"
+                  value={company}
+                  onChange={(e) => setCompany(e.target.value)}
+                  placeholder="e.g. Microsoft, Standard Bank, or the agency's name"
+                  className="w-full rounded-lg border border-line bg-ink-900 px-3 py-2.5 text-sm text-slate-100 placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+                />
+              </div>
+              <div>
+                <label htmlFor="report-location" className="mb-1.5 block text-xs font-medium text-muted">
+                  Where did this happen? <span className="text-faint">(optional)</span>
+                </label>
+                <input
+                  id="report-location"
+                  type="text"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  placeholder="e.g. Cape Town, or 'WhatsApp / remote'"
+                  className="w-full rounded-lg border border-line bg-ink-900 px-3 py-2.5 text-sm text-slate-100 placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+                />
+              </div>
+              {reportError && (
+                <p role="alert" className="text-xs text-risk-scam">
+                  {reportError}
+                </p>
+              )}
+            </div>
+          )}
+
+          {intent === 'verify' ? (
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!canSubmit}
+              className="btn-primary mt-4 w-full"
+            >
+              Check this evidence <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={fileReport}
+              disabled={!canReport || reporting === 'submitting'}
+              className="btn-primary mt-4 w-full"
+            >
+              {reporting === 'submitting' ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} /> Filing report…
+                </>
+              ) : (
+                <>
+                  File scam report <Flag className="h-4 w-4" strokeWidth={1.75} />
+                </>
+              )}
+            </button>
+          )}
+            </>
+          )}
         </motion.section>
 
         {/* One quiet row of factual trust markers */}

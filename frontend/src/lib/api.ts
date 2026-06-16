@@ -146,3 +146,34 @@ export async function analyze(
     options.signal
   );
 }
+
+export interface ScamReportInput {
+  companyName: string;
+  description: string;
+  domains?: string[];
+  emails?: string[];
+  phones?: string[];
+  location?: string;
+}
+
+/**
+ * File a community scam report (POST /report). The report is added to the
+ * scam-intelligence network so the next person who checks this recruiter's
+ * infrastructure sees the match. Server redacts sensitive identifiers and
+ * keeps only scam IOCs.
+ */
+export async function submitReport(
+  input: ScamReportInput,
+  options: RequestOptions = {}
+): Promise<{ ok: boolean; reportId: string }> {
+  return fetchJson(
+    '/report',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+    30_000,
+    options.signal
+  );
+}
