@@ -1,14 +1,15 @@
 // Stage 3 — Report-writer agent.
 //
 // Turns the verified signals + computed risk level into a clear, conservative,
-// user-facing narrative and concrete next steps. (Citations from a Foundry IQ
-// knowledge base are added in a later milestone.)
+// user-facing narrative and concrete next steps. When configured, Foundry IQ
+// grounding passages from prior reported scams are supplied so the narrative can
+// reference real precedent (the same grounding feeds the Investigator and Critic).
 
 import { FoundryRunner, extractJsonObject, asStringArray } from '../foundryRunner';
 import { Entities } from '../../../types/entities';
 import { RiskLevel } from '../../../types/report';
 import { EvidenceType, InvestigationSignals, ReporterResult } from '../types';
-import { GroundingPassage } from '../../network/knowledgeBase';
+import { GroundingPassage, groundingPromptLines } from '../../network/knowledgeBase';
 import { logger } from '../../observability/logger';
 
 export interface ReporterInput {
@@ -102,13 +103,7 @@ export class ReporterAgent {
         null,
         2
       ),
-      ...(input.grounding && input.grounding.length
-        ? [
-            '',
-            'PRIOR REPORTED SCAMS (grounding — reference only if clearly relevant):',
-            ...input.grounding.map((g) => `- ${g.content}`),
-          ]
-        : []),
+      ...groundingPromptLines(input.grounding),
     ].join('\n');
   }
 

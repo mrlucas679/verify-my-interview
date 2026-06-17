@@ -13,6 +13,7 @@
 import { ToolOrchestrator } from '../../tools';
 import { FoundryRunner, extractJsonObject, asStringArray } from '../foundryRunner';
 import { AgentToolCall, InvestigatorResult, InvestigationSignals, emptySignals } from '../types';
+import { GroundingPassage, groundingPromptLines } from '../../network/knowledgeBase';
 import { logger } from '../../observability/logger';
 
 export interface InvestigationInput {
@@ -37,7 +38,7 @@ export class InvestigatorAgent {
     private readonly tools: ToolOrchestrator
   ) {}
 
-  async run(input: InvestigationInput): Promise<InvestigatorResult> {
+  async run(input: InvestigationInput, grounding?: GroundingPassage[]): Promise<InvestigatorResult> {
     // Deterministic gathering is the AUTHORITY: every relevant tool runs, so
     // coverage is complete regardless of any LLM. The scorer reads these results.
     const base = await this.runDeterministic(input);
@@ -45,7 +46,7 @@ export class InvestigatorAgent {
     // Foundry reasons over the gathered results (no tool-calling, JSON mode) to
     // produce a clearer write-up. Any failure falls back to the deterministic one.
     try {
-      return await this.runFoundryReasoning(input, base);
+      return await this.runFoundryReasoning(input, base, grounding);
     } catch (error) {
       const fallback_reason = error instanceof Error ? error.message : String(error);
       logger.warn(`[Investigator] Foundry reasoning failed, using deterministic: ${fallback_reason}`);
@@ -57,13 +58,14 @@ export class InvestigatorAgent {
 
   private async runFoundryReasoning(
     input: InvestigationInput,
-    base: InvestigatorResult
+    base: InvestigatorResult,
+    grounding?: GroundingPassage[]
   ): Promise<InvestigatorResult> {
     logger.info('[Investigator] Running Foundry reasoning over gathered evidence...');
     const { finalText } = await this.runner!.runTurn({
       name: 'vmi-investigator',
       instructions: this.instructions(),
-      userMessage: this.reasoningMessage(input, base),
+      userMessage: this.reasoningMessage(input, base, grounding),
       responseFormat: 'json_object', // valid JSON object guaranteed — no free-text salvage
       // No tools: gathering already happened deterministically and completely.
     });
@@ -105,7 +107,11 @@ export class InvestigatorAgent {
     ].join('\n');
   }
 
-  private reasoningMessage(input: InvestigationInput, base: InvestigatorResult): string {
+  private reasoningMessage(
+    input: InvestigationInput,
+    base: InvestigatorResult,
+    grounding?: GroundingPassage[]
+  ): string {
     return [
       'Review the verification results already gathered for this job/interview evidence and write up the findings.',
       '',
@@ -119,6 +125,7 @@ export class InvestigatorAgent {
       '',
       'PRELIMINARY SIGNALS (deterministic, for reference):',
       JSON.stringify(base.signals, null, 2),
+      ...groundingPromptLines(grounding),
     ].join('\n');
   }
 

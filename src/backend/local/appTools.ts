@@ -15,7 +15,22 @@ import { redactAndCap, redactSensitiveIdentifiers } from '../privacy/redaction';
 import { ToolOrchestrator } from '../tools';
 import { ToolResult } from '../../types/tool_results';
 import { azureMonitorConfigured, azureMonitorStatus, initAzureMonitor } from '../observability/telemetry';
-import { cosmosEnabled, getSharedReport, saveReport, saveSharedReport } from '../data/cosmos';
+import {
+  cosmosEnabled,
+  deleteUserData,
+  getCase,
+  getSharedReport,
+  getUsage,
+  listCases,
+  saveCase,
+  saveReport,
+  saveSharedReport,
+  type CaseDoc,
+  type UserDoc,
+} from '../data/cosmos';
+import { getUser } from '../data/cosmos';
+import { authEnabled } from '../auth/identity';
+import { blobEnabled, deleteEvidence, getEvidence, putEvidence } from '../storage/blob';
 import { publishEvent } from '../events/serviceBus';
 import { cleanString, cleanStringArray, sniffAudioType, sniffUploadType } from '../http/guard';
 
@@ -42,6 +57,8 @@ export interface HealthSnapshot {
     web_research: boolean;
     azure_monitor: boolean;
     shared_reports: boolean;
+    accounts: boolean;
+    evidence_storage: boolean;
   };
   observability: ReturnType<typeof azureMonitorStatus>;
 }
@@ -313,9 +330,121 @@ export function healthSnapshot(): HealthSnapshot {
       web_research: webResearchEnabled(),
       azure_monitor: azureMonitorConfigured(),
       shared_reports: cosmosEnabled(),
+      accounts: authEnabled(),
+      evidence_storage: blobEnabled(),
     },
     observability: azureMonitorStatus(),
   };
+}
+
+// ── Accounts, case history & evidence (signed-in users only) ─────────────────
+// All env-gated: with auth/Cosmos/Blob unconfigured these throw a clean 503 or
+// no-op, so the stateless anonymous flow is unchanged.
+
+const SNIFFED_UPLOAD_EXT: Record<string, string> = {
+  jpeg: 'jpg',
+  png: 'png',
+  pdf: 'pdf',
+  tiff: 'tif',
+  webp: 'webp',
+  bmp: 'bmp',
+  heic: 'heic',
+};
+
+export interface ProfileResponse {
+  user: { id: string; email?: string; name?: string; provider?: string; plan: 'free'; consent: UserDoc['consent'] };
+  usage: { period: string; count: number };
+}
+
+/** A user's profile + current-period usage. Requires accounts + Cosmos. */
+export async function getProfileLocal(userId: string): Promise<ProfileResponse> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'Accounts are not configured on this server');
+  const [user, usage] = await Promise.all([getUser(userId), getUsage(userId)]);
+  if (!user) throw new LocalHttpError(404, 'Account not found');
+  return {
+    user: {
+      id: user._id,
+      email: user.email,
+      name: user.name,
+      provider: user.provider,
+      plan: 'free',
+      consent: user.consent,
+    },
+    usage,
+  };
+}
+
+/** Persist a redacted case snapshot for a signed-in user. Best-effort. */
+export async function recordCaseLocal(
+  userId: string,
+  analysis: LocalAnalyzeResponse,
+  evidenceIds: string[] = []
+): Promise<void> {
+  if (!cosmosEnabled()) return;
+  await saveCase({
+    id: analysis.case_id,
+    userId,
+    riskLevel: analysis.report.risk_level,
+    riskScore: analysis.report.risk_score,
+    caseSummary: analysis.report.case_summary,
+    evidenceIds,
+  });
+}
+
+export async function listCasesLocal(userId: string): Promise<CaseDoc[]> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'Accounts are not configured on this server');
+  return listCases(userId);
+}
+
+export async function getCaseLocal(userId: string, caseId: string): Promise<CaseDoc> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'Accounts are not configured on this server');
+  const found = await getCase(userId, typeof caseId === 'string' ? caseId : '');
+  if (!found) throw new LocalHttpError(404, 'Case not found');
+  return found;
+}
+
+/**
+ * Store an uploaded evidence file for a consented user. Re-sniffs and caps the
+ * buffer (never trust caller MIME), returns the evidenceId. 503 when storage off.
+ */
+export async function storeEvidenceLocal(userId: string, buffer: Buffer): Promise<{ evidenceId: string }> {
+  if (!blobEnabled()) throw new LocalHttpError(503, 'Evidence storage is not configured on this server');
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) throw new LocalHttpError(400, 'file is required');
+  const kind = sniffUploadType(buffer) ?? (sniffAudioType(buffer) ? 'audio' : null);
+  if (!kind) throw new LocalHttpError(415, 'Unsupported evidence file type');
+  const ext = SNIFFED_UPLOAD_EXT[kind] ?? (kind === 'audio' ? 'bin' : 'bin');
+  const contentType = kind === 'pdf' ? 'application/pdf' : kind === 'audio' ? 'application/octet-stream' : `image/${kind}`;
+  try {
+    const evidenceId = await putEvidence(userId, buffer, contentType, ext);
+    return { evidenceId };
+  } catch (error) {
+    if (error instanceof Error && /too large/.test(error.message)) {
+      throw new LocalHttpError(413, 'Evidence file too large to store');
+    }
+    throw error;
+  }
+}
+
+/** Stream-safe fetch of a user's own evidence file (404 when missing/not owned). */
+export async function getEvidenceLocal(
+  userId: string,
+  evidenceId: string
+): Promise<{ buffer: Buffer; contentType: string }> {
+  if (!blobEnabled()) throw new LocalHttpError(503, 'Evidence storage is not configured on this server');
+  const file = await getEvidence(userId, typeof evidenceId === 'string' ? evidenceId : '');
+  if (!file) throw new LocalHttpError(404, 'Evidence not found');
+  return file;
+}
+
+/**
+ * POPIA right to erasure: delete the account, its cases + usage, and any stored
+ * evidence blobs. De-identified community reports are intentionally retained.
+ */
+export async function deleteAccountLocal(userId: string): Promise<{ ok: true }> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'Accounts are not configured on this server');
+  const { evidenceIds } = await deleteUserData(userId);
+  await Promise.all(evidenceIds.map((id) => deleteEvidence(id)));
+  return { ok: true };
 }
 
 /** Persist a finished (redacted) report result for sharing; returns its id. */

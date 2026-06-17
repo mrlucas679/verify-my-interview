@@ -179,6 +179,18 @@ export class AgentOrchestrator {
     // verification tools analyse the true domain (key-gated; no-op offline).
     if (urlUnwrapEnabled()) await expandShortenedUrls(entities);
 
+    // Foundry IQ grounding: retrieve passages from prior reported scams ONCE and
+    // share them across every reasoning stage (Investigator, Critic, Reporter),
+    // so the whole pipeline reasons against real precedent — not just the final
+    // write-up. Only the Foundry passes consume grounding, so skip the network
+    // call entirely when running deterministically. Key-gated + never throws.
+    const grounding =
+      runner && knowledgeBaseEnabled()
+        ? await retrieveGrounding(
+            [entities.companies[0], entities.domains[0], evidence].filter(Boolean).join(' ')
+          )
+        : [];
+
     // 2. VERIFICATION — evidence gathering is always deterministic, so every
     // relevant identifier check runs and coverage is complete by construction.
     // When Foundry is configured the Investigator adds a reasoning pass OVER those
@@ -194,7 +206,7 @@ export class AgentOrchestrator {
     };
     const ver = await staged(
       'verification',
-      () => investigator.run(input),
+      () => investigator.run(input, grounding),
       (r) => ({
         engine: r.engine,
         fallback_reason: r.fallback_reason,
@@ -246,7 +258,7 @@ export class AgentOrchestrator {
     // 5. CRITIC — strike any claim no tool evidence supports.
     const crit = await staged(
       'critic',
-      () => new VerifierAgent(runner).run(evidence, investigation),
+      () => new VerifierAgent(runner).run(evidence, investigation, grounding),
       (r) => ({
         engine: r.engine,
         fallback_reason: r.fallback_reason,
@@ -299,12 +311,8 @@ export class AgentOrchestrator {
       .filter((s) => s.category === 'positive' && s.evidence.source !== 'text')
       .map((s) => s.evidence.detail);
 
-    // 6. REPORT — user-facing narrative composed from the vetted evidence.
-    // Foundry IQ grounding: pull passages from prior reported scams so the
-    // narrative can reference precedent (key-gated; no-op + [] when unconfigured).
-    const grounding = knowledgeBaseEnabled()
-      ? await retrieveGrounding([entities.companies[0], ...redFlags.slice(0, 4)].filter(Boolean).join('. '))
-      : [];
+    // 6. REPORT — user-facing narrative composed from the vetted evidence. Reuses
+    // the grounding retrieved up front (shared with the Investigator and Critic).
     const reporter = new ReporterAgent(runner);
     const rep = await staged(
       'report',

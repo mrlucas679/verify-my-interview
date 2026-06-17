@@ -137,10 +137,21 @@ scorer reads tool RESULTS, never the LLM prose. Foundry tool-CALLING lives in ch
 Service delegating to the `local/appTools` core (same core as CLI + MCP); the
 duplicate HTTP Azure Functions + PS1 packaging were removed (Functions return only
 as future Service Bus/Event Grid consumers). `package-lock.json` is committed.
-Open: Foundry IQ grounding for the Reporter (needs user Azure provisioning — see
-research/permanent-foundry-architecture.md); user-run `npm run seed:network`;
-fresh-terminal `npm start` (Foundry creds) + LIVE check of Foundry reasoning/chat;
-browser webm/opus check. Demo video: submitted.
+Foundry IQ grounding now feeds EVERY reasoning agent (Investigator, Critic, Reporter),
+retrieved once up front and shared via the orchestrator — not just the Reporter.
+Data platform (all env-gated, graceful degradation): Cosmos = durable report
+system-of-record + shared results; Service Bus events + in-process consumer; and the
+FREE TIER — Entra External ID JWT auth (`auth/`, Google/Apple as Entra social IdPs),
+`users`/`cases`/`usage`/`anon_trials` Cosmos collections (PII-residency hook
+`COSMOS_PII_CONNECTION_STRING`), consented evidence Blob storage (`storage/blob.ts`),
+endpoints `GET|DELETE /me`, `GET /cases[/:id]`, `POST /evidence`, `GET /evidence/:fileId`.
+Policy (2026-06-18): signed-in = unlimited (metered, not capped); anonymous = 1 trial
+then sign-in. Premium tier + Stripe billing + usage hard-cap are DEFERRED; accounts
+frontend is out of scope (backend-only).
+Open: LIVE verification of the data-platform slices needs user Azure provisioning (Entra
+External ID tenant + app reg + Google/Apple connections; Storage account) — code is inert
+until then; user-run `npm run seed:network`; fresh-terminal `npm start` (Foundry creds) +
+LIVE check of Foundry reasoning/chat/grounding; browser webm/opus check. Demo video: submitted.
 
 Orchestration state lives in `.claude/orchestrator/PROJECT_STATE.md`
 (decisions D1–D4, requirements coverage, risks) — read it before resuming work.

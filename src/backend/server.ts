@@ -22,15 +22,28 @@ import {
   MAX_LOCAL_EVIDENCE_CHARS,
   analyzeEvidenceLocal,
   chatLocal,
+  deleteAccountLocal,
+  getCaseLocal,
+  getEvidenceLocal,
+  getProfileLocal,
   getSharedReportLocal,
   healthSnapshot,
+  listCasesLocal,
   networkGraphLocal,
   networkStatsLocal,
+  recordCaseLocal,
   saveSharedReportLocal,
+  storeEvidenceLocal,
   submitReportLocal,
   transcribeAudioLocal,
   uploadDocumentLocal,
 } from './local/appTools';
+import {
+  AuthedRequest,
+  attachIdentity,
+  enforceAnalyzeAccess,
+  requireAuth,
+} from './auth/middleware';
 import {
   auditLog,
   cleanString,
@@ -59,6 +72,9 @@ app.disable('etag');
 app.use(securityHeaders);
 app.use(auditLog);
 app.use(express.json({ limit: '1mb' }));
+// Verify a bearer token (if present) and attach req.identity. No-op when auth is
+// unconfigured — the API stays fully open + stateless exactly as before.
+app.use(attachIdentity);
 
 // Static web UI (served from <project root>/public)
 app.use(express.static(path.join(process.cwd(), 'public')));
@@ -67,6 +83,11 @@ app.use(express.static(path.join(process.cwd(), 'public')));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
 // Larger cap for voice recordings (audio is heavier than a screenshot).
 const audioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
+// Consented evidence storage accepts images/PDFs and voice notes (25 MB cap).
+const evidenceUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
 });
@@ -133,7 +154,8 @@ app.post(
 app.post(
   '/analyze',
   rateLimit({ name: 'analyze', windowMs: 60_000, max: 10 }),
-  async (req: Request, res: Response) => {
+  enforceAnalyzeAccess,
+  async (req: AuthedRequest, res: Response) => {
     try {
       const evidence = req.body?.evidence;
       if (typeof evidence !== 'string' || evidence.trim().length === 0) {
@@ -144,7 +166,14 @@ app.post(
           error: `Evidence is too long (${evidence.length} chars). Limit is ${MAX_LOCAL_EVIDENCE_CHARS} — submit the relevant excerpt.`,
         });
       }
-      res.json(await analyzeEvidenceLocal(evidence));
+      const result = await analyzeEvidenceLocal(evidence);
+      // Signed-in users get durable case history (best-effort, never blocks the
+      // response). evidenceIds links any files stored via POST /evidence.
+      if (req.identity) {
+        const evidenceIds = cleanStringArray(req.body?.evidenceIds, 20, 192);
+        void recordCaseLocal(req.identity.userId, result, evidenceIds).catch(() => {});
+      }
+      res.json(result);
     } catch (error) {
       sendError(res, error, 'Internal server error');
     }
@@ -263,6 +292,120 @@ app.get(
 );
 
 /**
+ * GET /me
+ * The signed-in user's profile + current-period usage. 401 when not signed in,
+ * 503 when accounts are unconfigured.
+ */
+app.get(
+  '/me',
+  rateLimit({ name: 'account', windowMs: 60_000, max: 60 }),
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      res.json(await getProfileLocal(req.identity!.userId));
+    } catch (error) {
+      sendError(res, error, 'Failed to load account');
+    }
+  }
+);
+
+/**
+ * DELETE /me
+ * POPIA right to erasure: delete the account, its cases + usage, and stored
+ * evidence. De-identified community reports are retained.
+ */
+app.delete(
+  '/me',
+  rateLimit({ name: 'account', windowMs: 60_000, max: 10 }),
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      res.json(await deleteAccountLocal(req.identity!.userId));
+    } catch (error) {
+      sendError(res, error, 'Failed to delete account');
+    }
+  }
+);
+
+/**
+ * GET /cases
+ * The signed-in user's verification history (redacted snapshots only).
+ */
+app.get(
+  '/cases',
+  rateLimit({ name: 'account', windowMs: 60_000, max: 60 }),
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      res.json({ cases: await listCasesLocal(req.identity!.userId) });
+    } catch (error) {
+      sendError(res, error, 'Failed to load cases');
+    }
+  }
+);
+
+/**
+ * GET /cases/:id
+ * A single case snapshot owned by the signed-in user (404 otherwise).
+ */
+app.get(
+  '/cases/:id',
+  rateLimit({ name: 'account', windowMs: 60_000, max: 120 }),
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      res.json(await getCaseLocal(req.identity!.userId, req.params.id));
+    } catch (error) {
+      sendError(res, error, 'Failed to load case');
+    }
+  }
+);
+
+/**
+ * POST /evidence
+ * Store a consented evidence file (image/PDF/voice note) for the signed-in user.
+ * Magic-byte sniffed + size capped inside the core; returns an evidenceId to pass
+ * to POST /analyze. 503 when evidence storage is unconfigured.
+ */
+app.post(
+  '/evidence',
+  rateLimit({ name: 'evidence', windowMs: 60_000, max: 20 }),
+  requireAuth,
+  evidenceUpload.single('file'),
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      const file = (req as AuthedRequest & { file?: { buffer: Buffer } }).file;
+      if (!file) return res.status(400).json({ error: 'file is required' });
+      res.status(201).json(await storeEvidenceLocal(req.identity!.userId, file.buffer));
+    } catch (error) {
+      sendError(res, error, 'Failed to store evidence');
+    }
+  }
+);
+
+/**
+ * GET /evidence/:fileId
+ * Download the signed-in user's own evidence file (API-proxied; ownership scoped
+ * by the userId prefix, so one user can never read another's evidence).
+ */
+app.get(
+  '/evidence/:fileId',
+  rateLimit({ name: 'evidence', windowMs: 60_000, max: 60 }),
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      const evidenceId = `${req.identity!.userId}/${req.params.fileId}`;
+      const { buffer, contentType } = await getEvidenceLocal(req.identity!.userId, evidenceId);
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', 'inline');
+      res.send(buffer);
+    } catch (error) {
+      sendError(res, error, 'Failed to load evidence');
+    }
+  }
+);
+
+/**
  * GET /network/graph
  * The scam-intelligence entity graph (optionally filtered by ?type=&minTrust=).
  */
@@ -318,6 +461,12 @@ app.get('/docs', (_req: Request, res: Response) => {
       'POST /report': 'Submit a scam report to the intelligence network',
       'POST /share': 'Save a finished report result for sharing (returns an id)',
       'GET /shared/:id': 'Load a previously shared report result',
+      'GET /me': 'Signed-in user profile + usage (Bearer token; Google/Apple via Entra)',
+      'DELETE /me': 'Delete account + cases + stored evidence (POPIA erasure)',
+      'GET /cases': 'Signed-in user verification history',
+      'GET /cases/:id': 'A single case snapshot',
+      'POST /evidence': 'Store a consented evidence file (returns evidenceId)',
+      'GET /evidence/:fileId': 'Download own stored evidence (API-proxied)',
       'GET /network/graph': 'Scam-intelligence entity graph (?type=&minTrust=)',
       'GET /network/stats': 'Threat statistics over the report corpus',
       'GET /health': 'Health check with subsystem status',

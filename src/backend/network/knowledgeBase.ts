@@ -18,6 +18,21 @@ export interface GroundingPassage {
   content: string;
 }
 
+/**
+ * Render grounding passages as prompt lines shared by every Foundry reasoning
+ * agent (Investigator, Verifier, Reporter). Returns [] when there is nothing to
+ * add, so callers can spread it unconditionally. The "reference only" framing is
+ * deliberate: grounding enriches reasoning, it never overrides the gathered tool
+ * results or lets an agent invent a match beyond what is shown.
+ */
+export function groundingPromptLines(
+  passages: GroundingPassage[] | undefined,
+  label = 'PRIOR REPORTED SCAMS (grounding — reference only if clearly relevant; never invent a match beyond what is shown):'
+): string[] {
+  if (!passages || passages.length === 0) return [];
+  return ['', label, ...passages.map((g) => `- ${g.content}`)];
+}
+
 export function knowledgeBaseEnabled(): boolean {
   return Boolean(
     process.env.AZURE_SEARCH_ENDPOINT &&
