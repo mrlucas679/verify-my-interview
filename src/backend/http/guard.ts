@@ -278,22 +278,7 @@ export function auditLog(req: Request, res: Response, next: NextFunction): void 
   next();
 }
 
-// ── Optional API-key gate for write endpoints ───────────────────────────────
-
-/**
- * When the named env var is set, require a matching `x-api-key` header.
- * Unset (the hackathon default) it is a no-op — the endpoint stays public but
- * rate-limited. Constant-time comparison to avoid trivial timing probes.
- */
-export function apiKeyGate(envVar: string) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const expected = process.env[envVar];
-    if (!expected) return next();
-    const got = req.get('x-api-key') ?? '';
-    const a = Buffer.from(got);
-    const b = Buffer.from(expected);
-    const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
-    if (!ok) return res.status(401).json({ error: 'Invalid or missing API key' });
-    next();
-  };
-}
+// Note: the optional API-key check for POST /report lives in the application
+// core (`appTools.submitReportLocal` → `apiKeyMatches`, constant-time), so it
+// applies uniformly across the HTTP server, CLI, and MCP surfaces — there is no
+// separate Express middleware gate.

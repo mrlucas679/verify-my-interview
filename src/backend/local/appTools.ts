@@ -15,6 +15,8 @@ import { redactAndCap, redactSensitiveIdentifiers } from '../privacy/redaction';
 import { ToolOrchestrator } from '../tools';
 import { ToolResult } from '../../types/tool_results';
 import { azureMonitorConfigured, azureMonitorStatus, initAzureMonitor } from '../observability/telemetry';
+import { cosmosEnabled, getSharedReport, saveReport, saveSharedReport } from '../data/cosmos';
+import { publishEvent } from '../events/serviceBus';
 import { cleanString, cleanStringArray, sniffAudioType, sniffUploadType } from '../http/guard';
 
 export const MAX_LOCAL_EVIDENCE_CHARS = 40_000;
@@ -39,6 +41,7 @@ export interface HealthSnapshot {
     voice_transcription: boolean;
     web_research: boolean;
     azure_monitor: boolean;
+    shared_reports: boolean;
   };
   observability: ReturnType<typeof azureMonitorStatus>;
 }
@@ -155,9 +158,13 @@ export async function chatLocal(
     throw new Error('messages must contain 1-40 chat turns');
   }
 
-  const chatFoundryEnabled = process.env.VMI_CHAT_FOUNDRY_ENABLED === '1';
+  // The conversational detective uses Foundry whenever it is configured (matches
+  // the architecture: the detective is a Foundry agent with a graph_lookup tool).
+  // Set VMI_CHAT_FOUNDRY_ENABLED=0 to force the deterministic fallback — e.g. to
+  // cap cost/latency — without unsetting the project endpoint the pipeline uses.
   const settings = getFoundrySettings();
-  const runner = chatFoundryEnabled && settings.enabled ? new FoundryRunner(settings) : null;
+  const chatFoundryDisabled = process.env.VMI_CHAT_FOUNDRY_ENABLED === '0';
+  const runner = settings.enabled && !chatFoundryDisabled ? new FoundryRunner(settings) : null;
   const agent = new ConversationalAgent(runner, new ToolOrchestrator());
   return agent.run(ctx, messages.slice(-12));
 }
@@ -272,13 +279,24 @@ export async function submitReportLocal(
   };
   let indexed = false;
   if (scamNetwork.enabled) {
+    // Cosmos is the durable system of record; Search is the derived vector index.
+    if (cosmosEnabled()) {
+      try {
+        await saveReport(report);
+      } catch {
+        /* durable store is best-effort; the Search index still receives the report */
+      }
+    }
     await scamNetwork.add(report);
     indexed = await scamNetwork.waitForReport(report.reportId);
     await entityGraph.refresh();
   } else {
-    await entityGraph.addLocalReport(report);
+    await entityGraph.addLocalReport(report); // persists to Cosmos when configured
     indexed = true;
   }
+  // Best-effort event for async consumers (reindex/recompute/notify). No-op when
+  // Service Bus is unconfigured; never blocks or fails the submission.
+  void publishEvent('report.created', { reportId: report.reportId, companyName: report.companyName });
   return { ok: true, reportId: report.reportId, indexed };
 }
 
@@ -294,9 +312,36 @@ export function healthSnapshot(): HealthSnapshot {
       voice_transcription: speechEnabled(),
       web_research: webResearchEnabled(),
       azure_monitor: azureMonitorConfigured(),
+      shared_reports: cosmosEnabled(),
     },
     observability: azureMonitorStatus(),
   };
+}
+
+/** Persist a finished (redacted) report result for sharing; returns its id. */
+export async function saveSharedReportLocal(
+  result: unknown
+): Promise<{ id: string; expiresInDays: number }> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'Sharing is not configured on this server');
+  if (!result || typeof result !== 'object') {
+    throw new LocalHttpError(400, 'A report result is required');
+  }
+  try {
+    return await saveSharedReport(result);
+  } catch (error) {
+    if (error instanceof Error && /too large/.test(error.message)) {
+      throw new LocalHttpError(413, 'This report is too large to share');
+    }
+    throw error;
+  }
+}
+
+/** Fetch a shared report result by id (404 when missing or expired). */
+export async function getSharedReportLocal(id: string): Promise<unknown> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'Sharing is not configured on this server');
+  const result = await getSharedReport(typeof id === 'string' ? id : '');
+  if (!result) throw new LocalHttpError(404, 'This shared report was not found or has expired');
+  return result;
 }
 
 export async function networkStatsLocal(): Promise<unknown> {

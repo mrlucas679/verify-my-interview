@@ -38,15 +38,16 @@
   "dependencies": {
     "@azure/ai-agents": "^1.1.0",
     "@azure/ai-form-recognizer": "^5.1.0",
-    "@azure/functions": "^4.16.0",
     "@azure/identity": "^4.5.0",
     "@azure/monitor-opentelemetry": "^1.18.1",
     "@azure/search-documents": "^12.2.0",
+    "@azure/service-bus": "^7.9.5",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentelemetry/api": "^1.9.1",
     "axios": "^1.6.0",
     "dotenv": "^16.3.0",
     "express": "^4.18.0",
+    "mongodb": "^7.3.0",
     "multer": "^1.4.5-lts.1",
     "zod": "^4.4.3"
   },

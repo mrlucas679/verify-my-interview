@@ -55,9 +55,14 @@ export function summarizeToolResult(tool: string, data: unknown): string {
       return `${name} was not confirmed in the company registry checks available to this investigation.`;
     }
     case 'lookup_phone_intel': {
+      // Field names mirror the adapter output (phoneIntel.adapter.ts): is_valid,
+      // line_type, is_voip, carrier, country, risk_level, is_abuse_detected.
       const parts: string[] = [];
-      if (d.valid === false) parts.push('the number is not a valid phone number');
-      if (str(d.type).toLowerCase() === 'voip') parts.push('it is an internet-based phone line, which can be harder to trace');
+      if (d.is_valid === false) parts.push('the number is not a valid phone number');
+      if (d.is_voip === true || str(d.line_type).toLowerCase() === 'voip')
+        parts.push('it is an internet-based (VOIP) line, which can be harder to trace');
+      if (str(d.risk_level).toLowerCase() === 'high' || d.is_abuse_detected === true)
+        parts.push('it is flagged as high-risk or linked to reported abuse');
       if (str(d.carrier)) parts.push(`carrier: ${str(d.carrier)}`);
       if (str(d.country)) parts.push(`registered in ${str(d.country)}`);
       return parts.length ? `Phone check: ${parts.slice(0, 3).join('; ')}.` : 'The phone check did not return a clear warning sign.';

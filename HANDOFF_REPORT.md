@@ -356,13 +356,15 @@ Docs drift:
 - `docs/MIGRATION_GUIDE.md` reflects an older MongoDB/Redis/API-key migration
   plan and is not the current architecture.
 
-Legacy/dead code:
+Legacy/dead code (UPDATED 2026-06-16 — both prior bullets were stale):
 
-- `DeterministicScorer.score()` still contains TODO placeholders and returns a
-  zero score. The orchestrator does not use this class for live scoring, but it
-  is confusing and should be removed or rewritten.
-- `src/infrastructure/db.ts` references MongoDB/Redis, but root `tsconfig.json`
-  excludes `src/infrastructure` and the runtime path does not initialize it.
+- `DeterministicScorer.score()/explainScore()` is now fully implemented as a
+  legacy `SignalSet → StructuredSignal` adapter and is covered by
+  `tests/unit/scorer.test.ts` ("DeterministicScorer legacy adapter"). The live
+  pipeline scores via `deriveSignals` + `scoreStructuredSignals` directly; the
+  class is retained for the legacy adapter contract, not a TODO stub.
+- `src/infrastructure/db.ts` no longer exists — there is no MongoDB/Redis code
+  in the tree. State is Azure AI Search + in-memory entity graph only.
 
 Operational hardening:
 

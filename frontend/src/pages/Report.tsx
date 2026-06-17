@@ -5,13 +5,16 @@ import {
   ArrowLeft,
   AlertTriangle,
   ListChecks,
-  Cpu,
   Loader2,
   Volume2,
   Square,
   Search,
+  Share2,
+  Check,
 } from 'lucide-react';
 import { useCase } from '../store/caseStore';
+import { shareReport } from '../lib/api';
+import type { AnalyzeResponse } from '../lib/types';
 import { VerdictCard } from '../components/VerdictCard';
 import { InvestigationLayers } from '../components/InvestigationLayers';
 import { Findings } from '../components/Findings';
@@ -19,8 +22,8 @@ import { NetworkMatches } from '../components/NetworkMatches';
 import { ChatPanel } from '../components/ChatPanel';
 import { EvidenceGraph } from '../components/EvidenceGraph';
 import { GuidanceCitations } from '../components/GuidanceCitations';
-import type { PipelineTrace, RiskReport } from '../lib/types';
-import { engineModeLabel, reportNarration } from '../lib/communication';
+import type { RiskReport } from '../lib/types';
+import { reportNarration } from '../lib/communication';
 
 const STEPS = [
   'Reading the message and pulling out the names, links, and contact details',
@@ -29,27 +32,6 @@ const STEPS = [
   'Comparing identifiers with prior scam reports',
   'Reviewing the proof and writing a clear verdict',
 ];
-
-function EngineBadge({ trace }: { trace: PipelineTrace }) {
-  const degraded = (trace.degraded_stages?.length ?? 0) > 0;
-  const label = engineModeLabel(trace.engine_mode, degraded);
-  const map = {
-    foundry: { cls: 'bg-accent-soft text-accent border-accent/40' },
-    mixed: {
-      cls: degraded
-        ? 'bg-risk-needs/10 text-risk-needs border-risk-needs/40'
-        : 'bg-accent-soft text-accent border-accent/40',
-    },
-    deterministic: { cls: 'bg-ink-700 text-faint border-line' },
-  } as const;
-  const m = map[trace.engine_mode];
-  return (
-    <span className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium ${m.cls}`}>
-      <Cpu className="h-3.5 w-3.5" strokeWidth={1.75} />
-      {label}
-    </span>
-  );
-}
 
 // Reads the verdict + summary + top red flags aloud via the browser's
 // SpeechSynthesis API. No network, no new deps; cancels on unmount/stop.
@@ -106,6 +88,50 @@ function ListenButton({ report }: { report: RiskReport }) {
           <Volume2 className="h-3.5 w-3.5" strokeWidth={1.75} /> Read aloud
         </>
       )}
+    </button>
+  );
+}
+
+// Opt-in "Share" — saves the redacted report and copies a shareable link.
+// Default stays ephemeral; nothing is persisted until the user clicks this.
+function ShareButton({ result }: { result: AnalyzeResponse }) {
+  const [state, setState] = useState<'idle' | 'sharing' | 'copied' | 'error'>('idle');
+  const resetTimer = useRef<number | null>(null);
+
+  useEffect(() => () => { if (resetTimer.current) window.clearTimeout(resetTimer.current); }, []);
+
+  async function share() {
+    if (state === 'sharing') return;
+    setState('sharing');
+    try {
+      const { id } = await shareReport(result);
+      const link = `${window.location.origin}/s/${id}`;
+      try {
+        await navigator.clipboard.writeText(link);
+      } catch {
+        /* clipboard may be blocked; the link still works via the address bar */
+      }
+      setState('copied');
+    } catch {
+      setState('error');
+    }
+    if (resetTimer.current) window.clearTimeout(resetTimer.current);
+    resetTimer.current = window.setTimeout(() => setState('idle'), 3000);
+  }
+
+  const label =
+    state === 'sharing' ? 'Saving…' : state === 'copied' ? 'Link copied' : state === 'error' ? 'Unavailable' : 'Share';
+  const Icon = state === 'copied' ? Check : Share2;
+
+  return (
+    <button
+      type="button"
+      onClick={share}
+      disabled={state === 'sharing'}
+      aria-label="Save and copy a shareable link to this report"
+      className="inline-flex items-center gap-1.5 rounded-md border border-line bg-ink-800 px-2.5 py-1 text-xs text-muted transition hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+    >
+      <Icon className="h-3.5 w-3.5" strokeWidth={1.75} /> {label}
     </button>
   );
 }
@@ -263,8 +289,8 @@ export function Report() {
                 What the evidence shows
               </h1>
               <div className="flex items-center gap-2.5">
+                <ShareButton result={result} />
                 <ListenButton report={result.report} />
-                <EngineBadge trace={result.trace} />
               </div>
             </div>
             <VerdictCard report={result.report} />

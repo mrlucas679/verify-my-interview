@@ -67,6 +67,7 @@ export class VerifierAgent {
       name: 'vmi-verifier',
       instructions: this.instructions(),
       userMessage: this.userMessage(evidence, investigation),
+      responseFormat: 'json_object', // guaranteed valid JSON object — reliable parse
       // No tools: the critic reasons over evidence already gathered.
     });
 

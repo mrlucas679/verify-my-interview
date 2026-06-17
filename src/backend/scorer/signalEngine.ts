@@ -42,7 +42,7 @@ const FREE_HOSTING = [
 ];
 
 /** URL shorteners hide the true destination — a red flag in a job offer. */
-const URL_SHORTENERS = new Set([
+export const URL_SHORTENERS = new Set([
   'bit.ly',
   'tinyurl.com',
   'shorturl.at',

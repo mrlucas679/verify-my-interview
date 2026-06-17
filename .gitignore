@@ -1,7 +1,10 @@
 # Dependencies
 node_modules/
-package-lock.json
 yarn.lock
+# package-lock.json IS committed — npm ci (Docker/CI) and reproducible installs require it.
+
+# Agent dev-tooling framework (not part of the product) — keep out of the app repo
+.codex/
 
 # Build output
 dist/

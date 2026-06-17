@@ -23,10 +23,18 @@ function classify(evidence: string, headers: EmailHeaderAnalysis): EvidenceType 
   ) {
     return 'report';
   }
-  if (/\b(\d{1,2}:\d{2}\s?(AM|PM)?)\b.*\n.*\b\d{1,2}:\d{2}/is.test(t) || /whatsapp|telegram/i.test(t)) {
+  // A chat screenshot is identified by its conversation STRUCTURE (stacked
+  // message timestamps), not by merely mentioning a messaging app — "apply via
+  // WhatsApp" inside an email body is not a screenshot.
+  if (/\b\d{1,2}:\d{2}\s?(?:AM|PM)?\b[\s\S]*\n[\s\S]*\b\d{1,2}:\d{2}\b/i.test(t)) {
     return 'chat_screenshot';
   }
   return 'text';
+}
+
+/** Grammatically correct count phrase: "1 domain" / "2 domains". */
+function count(n: number, singular: string, plural: string): string {
+  return n === 1 ? `1 ${singular}` : `${n} ${plural}`;
 }
 
 export class EvidenceAgent {
@@ -48,15 +56,15 @@ export class EvidenceAgent {
     if (headers.senderIp) entities.sender_ip = headers.senderIp;
 
     const evidenceType = classify(evidence, headers);
-    const findings = this.findings(entities, headers, evidenceType);
+    const findings = this.findings(entities, headers);
 
     const counts = [
-      entities.companies.length && `${entities.companies.length} company`,
-      entities.emails.length && `${entities.emails.length} email`,
-      entities.domains.length && `${entities.domains.length} domain`,
-      entities.phones.length && `${entities.phones.length} phone`,
-      entities.urls.length && `${entities.urls.length} url`,
-      entities.money_requests.length && `${entities.money_requests.length} payment cue`,
+      entities.companies.length && count(entities.companies.length, 'company name', 'company names'),
+      entities.emails.length && count(entities.emails.length, 'email address', 'email addresses'),
+      entities.domains.length && count(entities.domains.length, 'domain', 'domains'),
+      entities.phones.length && count(entities.phones.length, 'phone number', 'phone numbers'),
+      entities.urls.length && count(entities.urls.length, 'link', 'links'),
+      entities.money_requests.length && count(entities.money_requests.length, 'payment cue', 'payment cues'),
     ]
       .filter(Boolean)
       .join(', ');
@@ -74,22 +82,17 @@ export class EvidenceAgent {
     };
   }
 
-  private findings(
-    entities: Entities,
-    headers: EmailHeaderAnalysis,
-    evidenceType: EvidenceType
-  ): Finding[] {
-    const findings: Finding[] = [
-      {
-        claim: `This looks like ${evidenceType.replace('_', ' ')} evidence`,
-        evidence: 'The structure of the submitted text was reviewed',
-        confidence: 0.9,
-        source: 'parser',
-      },
-    ];
+  private findings(entities: Entities, headers: EmailHeaderAnalysis): Finding[] {
+    // The summary already states the evidence type + counts, so the findings
+    // carry only the specifics (the actual identifiers, headers, payment cue).
+    const findings: Finding[] = [];
     if (entities.emails.length || entities.domains.length) {
+      const parts = [
+        entities.emails.length && count(entities.emails.length, 'email address', 'email addresses'),
+        entities.domains.length && count(entities.domains.length, 'domain', 'domains'),
+      ].filter(Boolean);
       findings.push({
-        claim: `Found ${entities.emails.length} email address(es) and ${entities.domains.length} domain(s) to check`,
+        claim: `Found ${parts.join(' and ')} to check`,
         evidence: [...entities.emails, ...entities.domains].slice(0, 5).join(', '),
         confidence: 0.95,
         source: 'parser',

@@ -22,6 +22,8 @@ import { ReporterAgent } from './agents/reporterAgent';
 import { deriveSignals, coverage } from '../scorer/signalEngine';
 import { scoreStructuredSignals, levelFromScore } from '../scorer/deterministic_scorer';
 import { matchGuidance } from '../knowledge/guidance';
+import { knowledgeBaseEnabled, retrieveGrounding } from '../network/knowledgeBase';
+import { expandShortenedUrls, urlUnwrapEnabled } from '../research/urlUnwrap';
 import { EntityGraph, NetworkMatch } from '../network/types';
 import { MultiPassResult, runMultiPassAdjudication } from './multiPass';
 import { analysisResultAttributes, withTelemetrySpan } from '../observability/telemetry';
@@ -89,24 +91,41 @@ function clampConfidence(value: number, cap = 0.95): number {
   return Math.max(0, Math.min(cap, value));
 }
 
+/**
+ * Confidence = how much we should trust the verdict, derived from AGREEMENT and
+ * evidence SUFFICIENCY (not the risk band). Corroboration raises it; struck
+ * claims, conflicting red/green evidence, resemblance-only matches, open evidence
+ * gaps, and thin tool coverage lower it. A case with no signals can fall into the
+ * < 0.3 "too sparse to band normally" regime; any case with real signals keeps at
+ * least 0.3 so its score-driven band is stable. Never claims certainty (≤ 0.95).
+ */
 function calibratedConfidence(
   baseConfidence: number,
   criticAdjustment: number,
   signals: StructuredSignal[],
-  removedClaimCount: number
+  removedClaimCount: number,
+  coverage: number,
+  missingEvidenceCount: number
 ): number {
   const hasRed = signals.some((s) => s.category === 'red');
   const hasPositive = signals.some((s) => s.category === 'positive');
   const semanticOnly = signals.length > 0 && signals.every((s) => s.id === 'network_match');
 
+  // Agreement.
   let adjustment = Math.max(-0.4, Math.min(0.15, criticAdjustment));
   if (removedClaimCount > 0) adjustment -= Math.min(0.25, removedClaimCount * 0.08);
-  if (hasRed && hasPositive) adjustment -= 0.1;
-  if (semanticOnly) adjustment -= 0.2;
+  if (hasRed && hasPositive) adjustment -= 0.12; // risk and reassurance disagree
+  if (semanticOnly) adjustment -= 0.2; // resemblance with no hard signal
   if (signals.length === 0) adjustment -= 0.15;
 
-  const cap = hasRed && hasPositive ? 0.85 : semanticOnly ? 0.65 : 0.95;
-  return clampConfidence(baseConfidence + adjustment, cap);
+  // Sufficiency — what "Needs More Verification" actually measures: unresolved
+  // evidence gaps and thin external coverage cap how firm any verdict can be.
+  if (missingEvidenceCount > 0) adjustment -= Math.min(0.2, missingEvidenceCount * 0.08);
+  if (coverage < 0.34) adjustment -= 0.08;
+
+  const cap = hasRed && hasPositive ? 0.85 : semanticOnly ? 0.6 : 0.95;
+  const c = clampConfidence(baseConfidence + adjustment, cap);
+  return signals.length > 0 ? Math.max(0.3, c) : c;
 }
 
 function toolDisplayName(tool: string): string {
@@ -156,11 +175,15 @@ export class AgentOrchestrator {
     stages.push(ev.trace);
     const entities = ev.result.entities;
 
-    // 2. VERIFICATION — registry/RDAP/pattern tools. This stage is deliberately
-    // deterministic: entity extraction already tells us which identifiers need
-    // checking, and routing through Foundry can add seconds before falling back
-    // to the same tool checks in production.
-    const investigator = new InvestigatorAgent(null, tools);
+    // Resolve shortened "apply here" links to their real destination so the
+    // verification tools analyse the true domain (key-gated; no-op offline).
+    if (urlUnwrapEnabled()) await expandShortenedUrls(entities);
+
+    // 2. VERIFICATION — evidence gathering is always deterministic, so every
+    // relevant identifier check runs and coverage is complete by construction.
+    // When Foundry is configured the Investigator adds a reasoning pass OVER those
+    // results (no tool-calling); the scorer reads the tool results, not the prose.
+    const investigator = new InvestigatorAgent(runner, tools);
     const input: InvestigationInput = {
       evidence,
       companyName: entities.companies[0],
@@ -192,22 +215,26 @@ export class AgentOrchestrator {
     const investigation = ver.result;
     const toolsUsed: AgentToolCall[] = [...investigation.toolsUsed];
 
-    // 3. RESEARCH — independent web/OSINT evidence with citations.
-    const res = await staged(
-      'research',
-      () => new ResearchAgent(tools).run(entities, toolsUsed),
-      (r) => ({ engine: r.engine, summary: r.summary, findings: r.findings })
-    );
+    // 3. RESEARCH + 4. NETWORK — independent of each other (research reads the
+    // already-completed investigator tool calls; network reads evidence/entities
+    // + the intelligence graph), so run them concurrently to cut wall-clock time
+    // when real web search and vector search are both live. Trace push order is
+    // preserved below.
+    const networkAgent = new NetworkAgent();
+    const [res, net] = await Promise.all([
+      staged(
+        'research',
+        () => new ResearchAgent(tools).run(entities, toolsUsed),
+        (r) => ({ engine: r.engine, summary: r.summary, findings: r.findings })
+      ),
+      staged(
+        'network',
+        () => networkAgent.run(evidence, entities),
+        (r) => ({ engine: r.engine, summary: r.summary, findings: r.findings })
+      ),
+    ]);
     stages.push(res.trace);
     toolsUsed.push(...res.result.toolsUsed);
-
-    // 4. NETWORK — semantic + structural matching against the intelligence graph.
-    const networkAgent = new NetworkAgent();
-    const net = await staged(
-      'network',
-      () => networkAgent.run(evidence, entities),
-      (r) => ({ engine: r.engine, summary: r.summary, findings: r.findings })
-    );
     stages.push(net.trace);
     const { matches, graph } = net.result;
 
@@ -241,11 +268,17 @@ export class AgentOrchestrator {
     // no verifiable identifiers in the evidence there is nothing to conclude —
     // never let a confidence nudge turn "no evidence" into reassuring "Low Risk".
     const scored = scoreStructuredSignals(signals, cov);
+    const missingEvidence = this.deriveMissingEvidence(entities, toolsUsed.length);
+    // Confidence is derived from agreement + evidence sufficiency (coverage,
+    // open gaps), so an under-verified verdict reports low confidence by virtue
+    // of the gaps themselves — no band-name clamp needed.
     const confidence = calibratedConfidence(
       scored.confidence,
       verified.confidence_adjustment,
       signals,
-      verified.removed_claims.length
+      verified.removed_claims.length,
+      cov,
+      missingEvidence.length
     );
     const nothingToVerify =
       entities.companies.length === 0 &&
@@ -267,6 +300,11 @@ export class AgentOrchestrator {
       .map((s) => s.evidence.detail);
 
     // 6. REPORT — user-facing narrative composed from the vetted evidence.
+    // Foundry IQ grounding: pull passages from prior reported scams so the
+    // narrative can reference precedent (key-gated; no-op + [] when unconfigured).
+    const grounding = knowledgeBaseEnabled()
+      ? await retrieveGrounding([entities.companies[0], ...redFlags.slice(0, 4)].filter(Boolean).join('. '))
+      : [];
     const reporter = new ReporterAgent(runner);
     const rep = await staged(
       'report',
@@ -277,6 +315,7 @@ export class AgentOrchestrator {
           riskScore: scored.score,
           entities,
           evidenceType: ev.result.evidenceType,
+          grounding,
         }),
       (r) => ({
         engine: r.engine,
@@ -302,7 +341,7 @@ export class AgentOrchestrator {
       verified_facts: verifiedFacts,
       red_flags: redFlags,
       positive_signals: positives,
-      missing_evidence: this.deriveMissingEvidence(entities, toolsUsed.length),
+      missing_evidence: missingEvidence,
       recommended_next_steps: narrative.recommended_next_steps,
       tool_results_used: toolsUsed.map((t) => t.tool),
       guidance_citations: matchGuidance(signals),

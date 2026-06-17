@@ -35,8 +35,9 @@ export function Layout() {
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-7 text-xs text-faint sm:flex-row">
           <Wordmark className="opacity-70" />
           <p className="text-center">
-            Demo build for the Microsoft Agents League. Not financial or legal advice. Always
-            verify through official channels before sending money or documents.
+            VerifyMyInterview checks job offers for scam signals before you reply. This is
+            guidance, not financial or legal advice — always confirm through a company&rsquo;s
+            official channels before sending money or documents.
           </p>
         </div>
       </footer>

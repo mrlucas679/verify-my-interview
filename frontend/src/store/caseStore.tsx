@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { AnalyzeResponse } from '../lib/types';
-import { analyze } from '../lib/api';
+import { analyze, loadSharedReport } from '../lib/api';
 
 interface CaseState {
   result: AnalyzeResponse | null;
@@ -16,6 +16,7 @@ interface CaseState {
   error: string | null;
   lastEvidence: string;
   runAnalysis: (evidence: string) => Promise<AnalyzeResponse | null>;
+  loadShared: (id: string) => Promise<AnalyzeResponse | null>;
   reset: () => void;
 }
 
@@ -54,6 +55,32 @@ export function CaseProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Load a previously shared report by id (the /s/:id route). Mirrors runAnalysis'
+  // request-id guarding so a stale load can't clobber a newer one.
+  const loadShared = useCallback(async (id: string) => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const data = await loadSharedReport(id, { signal: controller.signal });
+      if (requestId !== requestIdRef.current) return null;
+      setResult(data);
+      return data;
+    } catch (e) {
+      if (controller.signal.aborted || requestId !== requestIdRef.current) return null;
+      setError(e instanceof Error ? e.message : 'Could not load this shared report');
+      return null;
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
+    }
+  }, []);
+
   const reset = useCallback(() => {
     requestIdRef.current += 1;
     abortRef.current?.abort();
@@ -65,7 +92,9 @@ export function CaseProvider({ children }: { children: ReactNode }) {
   useEffect(() => () => abortRef.current?.abort(), []);
 
   return (
-    <CaseContext.Provider value={{ result, loading, error, lastEvidence, runAnalysis, reset }}>
+    <CaseContext.Provider
+      value={{ result, loading, error, lastEvidence, runAnalysis, loadShared, reset }}
+    >
       {children}
     </CaseContext.Provider>
   );

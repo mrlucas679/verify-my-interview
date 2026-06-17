@@ -109,7 +109,7 @@ Agents gather and vet evidence; **they never set the score**.
 
 | Service | Use | Degrades to |
 |---|---|---|
-| Microsoft Foundry Agent Service | All six reasoning stages + conversational detective (Entra ID auth, no API keys) | Deterministic per-agent fallbacks |
+| Microsoft Foundry Agent Service | The reasoning stages — Investigator, Critic, Report — plus the conversational detective (Entra ID auth, no API keys). Evidence gathering is always deterministic (complete tool coverage); the Investigator/Critic/Report reason OVER the gathered results in JSON mode (`responseFormat: json_object`), they don't drive tool-calling. Foundry tool-calling lives in chat (user-driven). Evidence extraction, Research (web search), and Network (vector/graph) are deterministic computation by design. | Deterministic per-agent fallbacks |
 | Azure AI Search | Vector + filterable index over the report corpus | In-memory seed corpus |
 | Azure AI Document Intelligence | OCR for screenshots / PDF offer letters | Text-only intake |
 | Azure OpenAI | `text-embedding-3-small` vectors for semantic match | Entity/structural matching only |
@@ -119,8 +119,9 @@ Agents gather and vet evidence; **they never set the score**.
 React 18 + Vite + Tailwind (Sentinel design system — dark security-SaaS, no
 emojis, Space Grotesk/Inter/JetBrains Mono). Pages: Verify
 (paste / OCR upload / URL / voice) and Report (verdict, six-stage timeline,
-findings, guidance citations, evidence graph, detective chat). The intelligence
-network is exposed through `GET /network/graph` and `GET /network/stats` and
-is rendered inside the report dossier. The evidence graph is
-`react-force-graph-2d` with node color by type, size by report count, and trust
-rings.
+findings, guidance citations, evidence graph, detective chat). The report
+dossier renders the **case-centric subgraph** returned inline by `/analyze`
+(`react-force-graph-2d`, node color by type, size by report count, trust rings).
+The corpus-wide `GET /network/graph` and `GET /network/stats` endpoints exist and
+are consumed by the CLI / MCP / Functions surfaces; a standalone in-app
+intelligence-network page is roadmap, not yet built.

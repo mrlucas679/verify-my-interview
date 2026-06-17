@@ -23,11 +23,10 @@ import {
 import type { Finding, PipelineTrace } from '../lib/types';
 import {
   buildInvestigationLayers,
-  formatDuration,
   type InvestigationLayer,
   type LayerId,
 } from '../lib/investigation';
-import { proofSourceLabel, stageEngineLabel, toolLabel } from '../lib/communication';
+import { proofSourceLabel, toolLabel } from '../lib/communication';
 
 const LAYER_ICON: Record<LayerId, LucideIcon> = {
   evidence: FileSearch,
@@ -36,24 +35,6 @@ const LAYER_ICON: Record<LayerId, LucideIcon> = {
   network: Network,
   adjudication: Gavel,
 };
-
-function EngineTag({ layer }: { layer: InvestigationLayer }) {
-  const foundry = layer.engine === 'foundry' && !layer.fallbackReason;
-  const fallback = Boolean(layer.fallbackReason);
-  return (
-    <span
-      className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
-        fallback
-          ? 'bg-risk-needs/10 text-risk-needs'
-          : foundry
-            ? 'bg-accent-soft text-accent'
-            : 'bg-ink-700 text-faint'
-      }`}
-    >
-      {stageEngineLabel(layer)}
-    </span>
-  );
-}
 
 function FindingRow({ finding }: { finding: Finding }) {
   return (
@@ -192,10 +173,6 @@ function LayerBlock({
           <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
         </span>
         <h3 className="font-display text-base font-semibold text-slate-100">{layer.title}</h3>
-        {layer.durationMs > 0 && (
-          <span className="font-mono text-[10px] text-faint">{formatDuration(layer.durationMs)}</span>
-        )}
-        {layer.engine && <EngineTag layer={layer} />}
       </div>
       <p className="mt-1 text-xs text-faint">{layer.role}</p>
 

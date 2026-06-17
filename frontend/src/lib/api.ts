@@ -147,6 +147,41 @@ export async function analyze(
   );
 }
 
+/**
+ * Save the finished (already redacted) report result so it can be revisited or
+ * shared via a link (POST /share). Returns an unguessable id. Stores only the
+ * derived report, never the raw evidence; auto-expires per the server's TTL.
+ */
+export async function shareReport(
+  result: AnalyzeResponse,
+  options: RequestOptions = {}
+): Promise<{ id: string; expiresInDays: number }> {
+  return fetchJson(
+    '/share',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result }),
+    },
+    20_000,
+    options.signal
+  );
+}
+
+/** Load a previously shared report result by id (GET /shared/:id). */
+export async function loadSharedReport(
+  id: string,
+  options: RequestOptions = {}
+): Promise<AnalyzeResponse> {
+  const data = await fetchJson<{ result: AnalyzeResponse }>(
+    `/shared/${encodeURIComponent(id)}`,
+    { method: 'GET' },
+    20_000,
+    options.signal
+  );
+  return data.result;
+}
+
 export interface ScamReportInput {
   companyName: string;
   description: string;

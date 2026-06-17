@@ -20,6 +20,7 @@ const SCRUBBED_ENV = [
   'AZURE_AI_AGENT_ID',
   'AZURE_SEARCH_ENDPOINT',
   'AZURE_SEARCH_API_KEY',
+  'AZURE_SEARCH_KNOWLEDGE_BASE',
   'AZURE_SPEECH_REGION',
   'AZURE_SPEECH_KEY',
   'AZURE_SPEECH_LOCALES',
@@ -44,6 +45,14 @@ const SCRUBBED_ENV = [
   'ABSTRACT_IP_KEY',
   'APPLICATIONINSIGHTS_CONNECTION_STRING',
   'VMI_TELEMETRY_DISABLED',
+  // Data layer — scrubbed so offline evals never touch Cosmos and stay deterministic.
+  'COSMOS_CONNECTION_STRING',
+  'COSMOS_DB',
+  'COSMOS_SHARE_TTL_DAYS',
+  // Link unwrapping (network) + event backbone — scrubbed so offline stays deterministic.
+  'URL_UNWRAP_ENABLED',
+  'SERVICEBUS_CONNECTION_STRING',
+  'SERVICEBUS_QUEUE',
 ];
 
 export interface EvalCaseFile {

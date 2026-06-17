@@ -141,6 +141,13 @@ export interface AgentTurnOptions {
     args: Record<string, any>,
     signal: AbortSignal
   ) => Promise<ToolResult>;
+  /**
+   * Constrain the model to emit a valid JSON object. Azure AI Agents Service
+   * supports only `text` | `json_object` (NOT strict json_schema — that is an
+   * Azure OpenAI chat/responses feature). JSON mode guarantees the reply parses,
+   * so reasoning agents don't need free-text salvage/sanitisation.
+   */
+  responseFormat?: 'json_object';
 }
 
 export interface AgentTurnResult {
@@ -250,6 +257,7 @@ export class FoundryRunner {
         maxCompletionTokens: MAX_COMPLETION_TOKENS,
         parallelToolCalls: false,
         temperature: 0.1,
+        ...(options.responseFormat ? { responseFormat: { type: options.responseFormat } } : {}),
         ...operationOptions(signal),
       });
       runId = run.id;

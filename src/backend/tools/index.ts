@@ -6,8 +6,15 @@ import { webResearchAdapter } from './adapters/webResearch.adapter';
 import { phoneIntelAdapter } from './adapters/phoneIntel.adapter';
 import { logger } from '../observability/logger';
 
+// Process-wide tool-result cache. A fresh ToolOrchestrator is created per
+// request, so a per-instance cache would never survive across cases. Sharing
+// the store at module scope means identical identifier lookups (RDAP, registry,
+// phone, web) are reused across requests within the TTL. The per-instance call
+// BUDGET below is deliberately NOT shared — each case keeps its own 10-call cap.
+const sharedCache = new Map<string, { result: ToolResult; timestamp: number }>();
+
 export class ToolOrchestrator {
-  private cache: Map<string, { result: ToolResult; timestamp: number }> = new Map();
+  private cache = sharedCache;
   private callCount = 0;
   private maxCalls = 10;
   private readonly CACHE_TTL = 60 * 60 * 1000; // 1 hour
