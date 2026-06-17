@@ -54,8 +54,10 @@ export class NetworkAgent {
 
     const summary =
       linkedReports.length || matches.length
-        ? `Linked to ${linkedReports.length} prior report(s) via ${sharedEntities.length} shared identifier(s); ${matches.length} semantic match(es).`
-        : 'No prior reports share this case’s identifiers; no semantic matches.';
+        ? linkedReports.length
+          ? `This case shares ${sharedEntities.length} identifier${sharedEntities.length === 1 ? '' : 's'} with ${linkedReports.length} earlier scam report${linkedReports.length === 1 ? '' : 's'}${matches.length ? `, and the wording resembles ${matches.length} known report${matches.length === 1 ? '' : 's'}` : ''}.`
+          : `Nothing in this case reuses known scam infrastructure, but its wording closely resembles ${matches.length} previously reported scam${matches.length === 1 ? '' : 's'}.`
+        : 'Nothing in this case matches earlier reports in the intelligence network.';
 
     return { engine: 'deterministic', matches, graph, findings, summary };
   }
@@ -77,7 +79,7 @@ export class NetworkAgent {
       }, 'unverified');
       signals.push({
         id: 'network_infrastructure_match',
-        label: `Shares infrastructure with ${linked.length} prior reported scam${linked.length > 1 ? 's' : ''}`,
+        label: `Shares identifiers with ${linked.length} earlier scam report${linked.length > 1 ? 's' : ''}`,
         category: 'red',
         points: TRUST_POINTS[best],
         evidence: {
@@ -97,14 +99,18 @@ export class NetworkAgent {
     if (!linked.length && strongSemantic.length) {
       const top = strongSemantic[0];
       const hard = top.reasons.some((r) => HARD_REASON.test(r));
+      // Independent matches corroborate each other: scale points with the
+      // match count (capped) so 4 known-scam lookalikes never read "Low Risk".
+      const base = hard ? 20 : 12;
+      const points = Math.min(hard ? 30 : 26, base + 4 * (strongSemantic.length - 1));
       signals.push({
         id: 'network_match',
         label: `Resembles ${strongSemantic.length} prior reported scam${strongSemantic.length > 1 ? 's' : ''}`,
         category: 'red',
-        points: hard ? 20 : 12,
+        points,
         evidence: {
           source: 'scam_network',
-          detail: `${top.reportId} (${top.scamType}) — ${top.reasons[0]}`,
+          detail: `${top.reportId} (${top.scamType}): ${top.reasons[0]}`,
         },
       });
     }
@@ -120,7 +126,7 @@ export class NetworkAgent {
     const findings: Finding[] = [];
     if (linkedReportCount) {
       findings.push({
-        claim: `Case infrastructure appears in ${linkedReportCount} prior report(s)`,
+        claim: `This case reuses identifiers from ${linkedReportCount} earlier report(s)`,
         evidence: `Shared identifiers: ${sharedLabels.slice(0, 4).join(', ')}`,
         confidence: 0.9,
         source: 'entity_graph',
@@ -137,7 +143,7 @@ export class NetworkAgent {
     if (!findings.length) {
       findings.push({
         claim: 'No prior network reports linked to this case',
-        evidence: 'Entity-graph and vector search returned no shared identifiers or strong matches',
+        evidence: 'No shared identifiers or strong wording matches were found',
         confidence: 0.6,
         source: 'entity_graph',
       });

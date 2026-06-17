@@ -62,6 +62,7 @@ export function VoiceRecorder({ onTranscript }: VoiceRecorderProps) {
   const mimeRef = useRef<string | undefined>(undefined);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioUrlRef = useRef<string | null>(null); // mirrors audioUrl for unmount revoke
+  const transcribeAbortRef = useRef<AbortController | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const stopTimer = useCallback(() => {
@@ -82,6 +83,7 @@ export function VoiceRecorder({ onTranscript }: VoiceRecorderProps) {
     return () => {
       stopTimer();
       stopTracks();
+      transcribeAbortRef.current?.abort();
       const r = mediaRecorderRef.current;
       if (r && r.state !== 'inactive') {
         try {
@@ -223,22 +225,31 @@ export function VoiceRecorder({ onTranscript }: VoiceRecorderProps) {
   }
 
   async function runTranscription(blob: Blob, fileName: string, fallbackDuration: number) {
+    transcribeAbortRef.current?.abort();
+    const controller = new AbortController();
+    transcribeAbortRef.current = controller;
     setError(null);
     setTranscribing(true);
     try {
-      const { text, durationSec, locale } = await transcribeAudio(blob, fileName);
+      const { text, durationSec, locale } = await transcribeAudio(blob, fileName, {
+        signal: controller.signal,
+      });
       if (!text.trim()) {
         setError('No speech was recognised. Try again, or type your story instead.');
         return;
       }
       onTranscript(text, { durationSec: durationSec || fallbackDuration, locale });
     } catch (e) {
+      if (controller.signal.aborted) return;
       // api.ts surfaces the server's message verbatim (503/415/422/network).
       setError(
         e instanceof Error ? e.message : 'Transcription failed. Type or paste the message instead.'
       );
     } finally {
-      setTranscribing(false);
+      if (transcribeAbortRef.current === controller) {
+        transcribeAbortRef.current = null;
+        setTranscribing(false);
+      }
     }
   }
 
@@ -271,11 +282,11 @@ export function VoiceRecorder({ onTranscript }: VoiceRecorderProps) {
           For the strongest investigation, try to say:
         </p>
         <ul className="mt-1.5 space-y-1 text-xs text-faint">
-          <li>— The company or recruiter name, and where they contacted you.</li>
-          <li>— The exact email address or phone number they used.</li>
-          <li>— What they asked you to do (interview, forms, downloads).</li>
-          <li>— Any payment, fees, gift cards, or banking details requested.</li>
-          <li>— Any documents or personal information they wanted.</li>
+          <li>The company or recruiter name, and where they contacted you.</li>
+          <li>The exact email address or phone number they used.</li>
+          <li>What they asked you to do, such as interviews, forms, or downloads.</li>
+          <li>Any payment, fees, gift cards, or banking details requested.</li>
+          <li>Any documents or personal information they wanted.</li>
         </ul>
       </div>
 
@@ -355,7 +366,7 @@ export function VoiceRecorder({ onTranscript }: VoiceRecorderProps) {
             <div className="flex flex-col gap-4 rounded-lg border border-line bg-ink-850 p-4">
               <div className="flex items-center gap-2 text-xs text-muted">
                 <FileAudio className="h-4 w-4" strokeWidth={1.75} />
-                Recorded {fmt(elapsed)} — review it, then transcribe.
+                Recorded {fmt(elapsed)}. Review it, then transcribe.
               </div>
               {audioUrl && (
                 <audio controls src={audioUrl} className="w-full">
@@ -381,7 +392,7 @@ export function VoiceRecorder({ onTranscript }: VoiceRecorderProps) {
                 >
                   {transcribing ? (
                     <>
-                      <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} /> Transcribing…
+                      <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} /> Transcribing...
                     </>
                   ) : (
                     <>
@@ -414,7 +425,7 @@ export function VoiceRecorder({ onTranscript }: VoiceRecorderProps) {
         </button>
         {!recorderSupported && (
           <p className="text-xs text-faint">
-            Recording isn&#39;t available in this browser — upload an audio file instead.
+            Recording is not available in this browser. Upload an audio file instead.
           </p>
         )}
         <input

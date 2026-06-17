@@ -25,7 +25,7 @@ flowchart TB
     X[(Azure AI Search<br/>vector index)] <--> N
     G[Entity Graph<br/>domains · phones · wallets · trust levels] <--> N
   end
-  W --> UI[Sentinel UI<br/>report · evidence graph · network page]
+  W --> UI[Sentinel UI<br/>report · evidence graph · network API]
   UI <--> D[Conversational Detective<br/>Foundry agent + graph_lookup tool]
 ```
 
@@ -99,7 +99,8 @@ Agents gather and vet evidence; **they never set the score**.
   band, score range, required/forbidden signals, and network-match
   expectations. `npm test` gates the same suite via Jest.
 - **Health** — `GET /health` reports per-subsystem flags (foundry_agents,
-  scam_network_index, entity_graph, document_ocr, web_research).
+  scam_network_index, entity_graph, document_ocr, voice_transcription,
+  web_research).
 - **Safety framing** — risk assessment, not accusation; evidence is untrusted
   input; network demo data is synthetic and labeled as such in the UI; no PII
   is logged.
@@ -108,7 +109,7 @@ Agents gather and vet evidence; **they never set the score**.
 
 | Service | Use | Degrades to |
 |---|---|---|
-| Microsoft Foundry Agent Service | All six reasoning stages + conversational detective (Entra ID auth, no API keys) | Deterministic per-agent fallbacks |
+| Microsoft Foundry Agent Service | The reasoning stages — Investigator, Critic, Report — plus the conversational detective (Entra ID auth, no API keys). Evidence gathering is always deterministic (complete tool coverage); the Investigator/Critic/Report reason OVER the gathered results in JSON mode (`responseFormat: json_object`), they don't drive tool-calling. Foundry tool-calling lives in chat (user-driven). Evidence extraction, Research (web search), and Network (vector/graph) are deterministic computation by design. | Deterministic per-agent fallbacks |
 | Azure AI Search | Vector + filterable index over the report corpus | In-memory seed corpus |
 | Azure AI Document Intelligence | OCR for screenshots / PDF offer letters | Text-only intake |
 | Azure OpenAI | `text-embedding-3-small` vectors for semantic match | Entity/structural matching only |
@@ -116,8 +117,11 @@ Agents gather and vet evidence; **they never set the score**.
 ## Frontend
 
 React 18 + Vite + Tailwind (Sentinel design system — dark security-SaaS, no
-emojis, Space Grotesk/Inter/JetBrains Mono). Pages: Landing, New Case
-(paste / OCR upload / URL), Report (verdict, six-stage timeline, findings,
-guidance citations, evidence graph, detective chat), Intelligence Network
-(full graph + threat stats). The evidence graph is `react-force-graph-2d`
-with node color by type, size by report count, and trust rings.
+emojis, Space Grotesk/Inter/JetBrains Mono). Pages: Verify
+(paste / OCR upload / URL / voice) and Report (verdict, six-stage timeline,
+findings, guidance citations, evidence graph, detective chat). The report
+dossier renders the **case-centric subgraph** returned inline by `/analyze`
+(`react-force-graph-2d`, node color by type, size by report count, trust rings).
+The corpus-wide `GET /network/graph` and `GET /network/stats` endpoints exist and
+are consumed by the CLI / MCP / Functions surfaces; a standalone in-app
+intelligence-network page is roadmap, not yet built.

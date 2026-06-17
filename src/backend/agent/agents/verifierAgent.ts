@@ -16,6 +16,7 @@ import {
   InvestigationSignals,
   VerifierResult,
 } from '../types';
+import { logger } from '../../observability/logger';
 
 function dedupe(values: string[]): string[] {
   return Array.from(new Set(values.map((v) => v.trim()).filter(Boolean)));
@@ -26,6 +27,13 @@ function clampAdjustment(n: unknown): number {
   return Math.max(-1, Math.min(1, n));
 }
 
+const EXTERNAL_EVIDENCE_TOOLS = new Set([
+  'lookup_company_registry',
+  'lookup_domain_rdap',
+  'lookup_phone_intel',
+  'research_company_web',
+]);
+
 export class VerifierAgent {
   constructor(private readonly runner: FoundryRunner | null) {}
 
@@ -33,18 +41,19 @@ export class VerifierAgent {
     evidence: string,
     investigation: InvestigatorResult
   ): Promise<VerifierResult> {
+    let fallbackReason: string | undefined;
     if (this.runner) {
       try {
         return await this.runFoundry(evidence, investigation);
       } catch (error) {
-        console.error(
-          `[Verifier] Foundry path failed, using deterministic: ${
-            error instanceof Error ? error.message : error
-          }`
+        fallbackReason = error instanceof Error ? error.message : String(error);
+        logger.warn(
+          `[Verifier] Foundry path failed, using deterministic: ${fallbackReason}`
         );
       }
     }
-    return this.runDeterministic(investigation);
+    const deterministic = this.runDeterministic(investigation);
+    return fallbackReason ? { ...deterministic, fallback_reason: fallbackReason } : deterministic;
   }
 
   // --- Foundry path -----------------------------------------------------------
@@ -53,11 +62,12 @@ export class VerifierAgent {
     evidence: string,
     investigation: InvestigatorResult
   ): Promise<VerifierResult> {
-    console.log('[Verifier] Running via Foundry...');
+    logger.info('[Verifier] Running via Foundry...');
     const { finalText } = await this.runner!.runTurn({
       name: 'vmi-verifier',
       instructions: this.instructions(),
       userMessage: this.userMessage(evidence, investigation),
+      responseFormat: 'json_object', // guaranteed valid JSON object — reliable parse
       // No tools: the critic reasons over evidence already gathered.
     });
 
@@ -138,7 +148,7 @@ export class VerifierAgent {
   // --- Deterministic fallback -------------------------------------------------
 
   private runDeterministic(investigation: InvestigatorResult): VerifierResult {
-    console.log('[Verifier] Running deterministic critique...');
+    logger.info('[Verifier] Running deterministic critique...');
     const signals: InvestigationSignals = {
       verified_facts: dedupe(investigation.signals.verified_facts),
       red_flags: dedupe(investigation.signals.red_flags),
@@ -146,19 +156,24 @@ export class VerifierAgent {
     };
 
     const successfulTools = investigation.toolsUsed.filter((t) => t.result.success).length;
+    const successfulExternalTools = investigation.toolsUsed.filter(
+      (t) => t.result.success && EXTERNAL_EVIDENCE_TOOLS.has(t.tool)
+    ).length;
     const removed_claims: string[] = [];
     let critique: string;
     let confidence_adjustment = 0;
 
-    if (successfulTools === 0) {
-      // Nothing was actually verified externally — keep only the locally-derived
-      // scam-pattern signal and treat the rest as low confidence.
+    if (successfulExternalTools === 0) {
+      // Pattern matching is useful, but it is not independent corroboration.
+      // Keep the signals, lower certainty, and let the report say what is missing.
       critique =
-        'No external verification tool succeeded; findings rest on text analysis alone. Lowering confidence.';
-      confidence_adjustment = -0.2;
+        successfulTools === 0
+          ? 'No outside check could confirm the details, so the verdict relies on the submitted text.'
+          : 'Only the message wording could be checked; no company, domain, phone, or public source confirmed it.';
+      confidence_adjustment = -0.15;
     } else {
-      critique = `${successfulTools} verification tool(s) corroborated findings.`;
-      confidence_adjustment = Math.min(0.2, successfulTools * 0.1);
+      critique = `${successfulExternalTools} independent identifier check${successfulExternalTools === 1 ? '' : 's'} supported the findings.`;
+      confidence_adjustment = Math.min(0.15, successfulExternalTools * 0.07);
     }
 
     return {

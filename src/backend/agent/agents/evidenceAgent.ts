@@ -16,10 +16,25 @@ function classify(evidence: string, headers: EmailHeaderAnalysis): EvidenceType 
   if (headers.isRawEmail) return 'email';
   const t = evidence.trim();
   if (/^https?:\/\/\S+$/i.test(t)) return 'url';
-  if (/\b(\d{1,2}:\d{2}\s?(AM|PM)?)\b.*\n.*\b\d{1,2}:\d{2}/is.test(t) || /whatsapp|telegram/i.test(t)) {
+  if (
+    /\b(?:i\s+(?:want|wanted|need)\s+to\s+report|i(?:'|’)?m\s+reporting|report(?:ing|ed)?\s+(?:this|a\s+scam)|i\s+(?:got|was)\s+scammed)\b/i.test(
+      t
+    )
+  ) {
+    return 'report';
+  }
+  // A chat screenshot is identified by its conversation STRUCTURE (stacked
+  // message timestamps), not by merely mentioning a messaging app — "apply via
+  // WhatsApp" inside an email body is not a screenshot.
+  if (/\b\d{1,2}:\d{2}\s?(?:AM|PM)?\b[\s\S]*\n[\s\S]*\b\d{1,2}:\d{2}\b/i.test(t)) {
     return 'chat_screenshot';
   }
   return 'text';
+}
+
+/** Grammatically correct count phrase: "1 domain" / "2 domains". */
+function count(n: number, singular: string, plural: string): string {
+  return n === 1 ? `1 ${singular}` : `${n} ${plural}`;
 }
 
 export class EvidenceAgent {
@@ -41,15 +56,15 @@ export class EvidenceAgent {
     if (headers.senderIp) entities.sender_ip = headers.senderIp;
 
     const evidenceType = classify(evidence, headers);
-    const findings = this.findings(entities, headers, evidenceType);
+    const findings = this.findings(entities, headers);
 
     const counts = [
-      entities.companies.length && `${entities.companies.length} company`,
-      entities.emails.length && `${entities.emails.length} email`,
-      entities.domains.length && `${entities.domains.length} domain`,
-      entities.phones.length && `${entities.phones.length} phone`,
-      entities.urls.length && `${entities.urls.length} url`,
-      entities.money_requests.length && `${entities.money_requests.length} payment cue`,
+      entities.companies.length && count(entities.companies.length, 'company name', 'company names'),
+      entities.emails.length && count(entities.emails.length, 'email address', 'email addresses'),
+      entities.domains.length && count(entities.domains.length, 'domain', 'domains'),
+      entities.phones.length && count(entities.phones.length, 'phone number', 'phone numbers'),
+      entities.urls.length && count(entities.urls.length, 'link', 'links'),
+      entities.money_requests.length && count(entities.money_requests.length, 'payment cue', 'payment cues'),
     ]
       .filter(Boolean)
       .join(', ');
@@ -60,28 +75,24 @@ export class EvidenceAgent {
       evidenceType,
       headers,
       findings,
-      summary: `Classified input as ${evidenceType.replace('_', ' ')}; extracted ${counts || 'no entities'}${
-        headers.isRawEmail ? '; parsed full email headers' : ''
+      summary: `Read this as ${evidenceType.replace('_', ' ')} evidence and found ${
+        counts || 'nothing checkable — no email address, link, company name, or phone number'
+      }${headers.isRawEmail ? '; the full email routing headers were present and examined' : ''
       }.`,
     };
   }
 
-  private findings(
-    entities: Entities,
-    headers: EmailHeaderAnalysis,
-    evidenceType: EvidenceType
-  ): Finding[] {
-    const findings: Finding[] = [
-      {
-        claim: `Evidence classified as ${evidenceType.replace('_', ' ')}`,
-        evidence: 'Structural analysis of the submitted content',
-        confidence: 0.9,
-        source: 'parser',
-      },
-    ];
+  private findings(entities: Entities, headers: EmailHeaderAnalysis): Finding[] {
+    // The summary already states the evidence type + counts, so the findings
+    // carry only the specifics (the actual identifiers, headers, payment cue).
+    const findings: Finding[] = [];
     if (entities.emails.length || entities.domains.length) {
+      const parts = [
+        entities.emails.length && count(entities.emails.length, 'email address', 'email addresses'),
+        entities.domains.length && count(entities.domains.length, 'domain', 'domains'),
+      ].filter(Boolean);
       findings.push({
-        claim: `Identified ${entities.emails.length} email address(es) and ${entities.domains.length} domain(s) to verify`,
+        claim: `Found ${parts.join(' and ')} to check`,
         evidence: [...entities.emails, ...entities.domains].slice(0, 5).join(', '),
         confidence: 0.95,
         source: 'parser',
@@ -89,14 +100,14 @@ export class EvidenceAgent {
     }
     if (headers.isRawEmail) {
       findings.push({
-        claim: 'Full email headers present and parsed',
+          claim: 'Full email routing headers were included',
         evidence: `From ${headers.fromAddress ?? 'unknown'}${headers.replyToAddress ? `, Reply-To ${headers.replyToAddress}` : ''}${headers.senderIp ? `, origin IP ${headers.senderIp}` : ''}`,
         confidence: 0.95,
         source: 'email_headers',
       });
       if (headers.replyToMismatch) {
         findings.push({
-          claim: 'Reply-To routes replies to a different domain than the sender',
+          claim: 'Replies go to a different domain than the sender used',
           evidence: `From domain ${headers.fromDomain} vs Reply-To domain ${headers.replyToDomain}`,
           confidence: 0.95,
           source: 'email_headers',
@@ -109,8 +120,8 @@ export class EvidenceAgent {
       ] as const) {
         if (value === 'fail' || value === 'softfail') {
           findings.push({
-            claim: `${mech} authentication failed for the sending domain`,
-            evidence: `Authentication-Results: ${mech.toLowerCase()}=${value}`,
+            claim: `The sender failed ${mech}, an email proof-of-sender check`,
+            evidence: `Header result: ${mech.toLowerCase()}=${value}`,
             confidence: 0.9,
             source: 'email_headers',
           });
@@ -119,7 +130,7 @@ export class EvidenceAgent {
     }
     if (entities.money_requests.length) {
       findings.push({
-        claim: 'Evidence contains payment/fee language',
+        claim: 'The message mentions a payment or fee',
         evidence: entities.money_requests.slice(0, 4).join(', '),
         confidence: 0.85,
         source: 'parser',

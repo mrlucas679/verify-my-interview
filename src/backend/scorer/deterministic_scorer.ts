@@ -4,7 +4,11 @@ import { SignalSet, RiskLevel, ScoringContext, StructuredSignal } from '../../ty
 
 /** Map a 0-100 score + confidence to a risk band. */
 export function levelFromScore(score: number, confidence: number): RiskLevel {
-  if (confidence < 0.3) return 'Inconclusive';
+  if (confidence < 0.3) {
+    if (score <= 15) return 'Inconclusive';
+    if (score <= 65) return 'Needs More Verification';
+    return 'Suspicious';
+  }
   if (score <= 15) return 'Low Risk';
   if (score <= 35) return 'Needs More Verification';
   if (score <= 65) return 'Suspicious';
@@ -20,13 +24,53 @@ export function scoreStructuredSignals(
   signals: StructuredSignal[],
   toolCoverage: number
 ): { score: number; level: RiskLevel; confidence: number } {
-  const raw = signals.reduce((sum, s) => sum + s.points, 0);
+  // Scam-mechanic signals: evidence of HOW the fraud operates. Semantic
+  // resemblance alone is generic job language — when a case has verified
+  // green signals and zero mechanics, resemblance counts at half weight so a
+  // clean interview invite is not dragged up the bands by corpus similarity.
+  const MECHANIC_IDS = new Set([
+    'upfront_payment_request',
+    'training_fee_narrative',
+    'money_mule_request',
+    'credential_request',
+    'sms_reply_bait',
+    'reply_to_mismatch',
+    'dmarc_fail',
+    'spf_fail',
+    'lookalike_domain',
+    'unofficial_application_channel',
+    'high_keyword_score',
+    'urgency_pressure',
+    'no_interview_offer',
+    'network_infrastructure_match',
+  ]);
+  const hasMechanic = signals.some((s) => s.category === 'red' && MECHANIC_IDS.has(s.id));
+  const greenTotal = signals.reduce((sum, s) => sum + Math.min(0, s.points), 0);
+  const dampenSemantic = !hasMechanic && greenTotal <= -15;
+
+  const raw = signals.reduce((sum, s) => {
+    if (s.id === 'network_match' && dampenSemantic) return sum + Math.round(s.points / 2);
+    return sum + s.points;
+  }, 0);
   const score = Math.max(0, Math.min(100, raw));
+  // Capped at 0.95: a deterministic heuristic never gets to claim certainty.
   const confidence = Math.max(
     0,
-    Math.min(1, 0.25 + toolCoverage * 0.45 + Math.min(signals.length, 6) * 0.05)
+    Math.min(0.95, 0.25 + toolCoverage * 0.45 + Math.min(signals.length, 6) * 0.05)
   );
-  return { score, level: levelFromScore(score, confidence), confidence };
+  let level = levelFromScore(score, confidence);
+  // Floor rule: wording that matches the scam-intelligence network must never
+  // be presented as "Low Risk" when there is nothing else to go on — sparse
+  // evidence is inconclusive, not safe. When the case carries VERIFIED green
+  // signals and no scam mechanics (dampenSemantic), the greens earned the
+  // verdict and the floor does not apply.
+  if (level === 'Low Risk' && !dampenSemantic && signals.some((s) => s.id === 'network_match')) {
+    level = 'Needs More Verification';
+  }
+  if (level === 'Low Risk' && signals.some((s) => s.category === 'red' && MECHANIC_IDS.has(s.id))) {
+    level = 'Needs More Verification';
+  }
+  return { score, level, confidence };
 }
 
 export class DeterministicScorer {
@@ -35,84 +79,78 @@ export class DeterministicScorer {
    * Returns score 0-100 and confidence 0.0-1.0
    */
   static score(context: ScoringContext): { score: number; level: RiskLevel; confidence: number } {
-    const score = 0;
-
-    // TODO: Implement scoring rules
-    // Example rules (to be tuned based on evaluation):
-    // - upfront_payment_request: +35 points
-    // - email_domain_mismatch: +25 points
-    // - recruiter_domain_age < 180 days: +20 points
-    // - dns_records_weak: +15 points
-    // - url_belongs_to_different_domain: +15 points
-    // - company_registry_match (positive): -10 points
-    // - established_domain > 5 years (positive): -5 points
-
-    // Calculate confidence based on:
-    // - tool coverage (how many tools were called)
-    // - signal alignment (do signals agree?)
-    // - missing evidence gaps
-
-    const confidence = this.calculateConfidence(context);
-    const level = this.scoreToLevel(score, confidence);
-
-    return {
-      score: Math.min(100, Math.max(0, score)),
-      level,
-      confidence
-    };
-  }
-
-  /**
-   * Map score to risk level
-   */
-  private static scoreToLevel(score: number, confidence: number): RiskLevel {
-    if (confidence < 0.3) {
-      return 'Inconclusive';
-    }
-
-    if (score <= 20) {
-      return 'Low Risk';
-    } else if (score <= 40) {
-      return 'Needs More Verification';
-    } else if (score <= 70) {
-      return 'Suspicious';
-    } else {
-      return 'Likely Scam';
-    }
-  }
-
-  /**
-   * Calculate confidence score (0.0-1.0) based on verification coverage
-   */
-  private static calculateConfidence(context: ScoringContext): number {
-    // Base confidence from tool coverage
-    const toolCoverage = context.verification_coverage; // 0.0-1.0
-
-    // Reduce confidence if too few tools used
-    if (context.tool_results_used.length === 0) {
-      return 0.1;
-    }
-
-    // Expected tool count for good coverage
-    const expectedToolCount = 4; // company + domain + dns + patterns
-    const toolQuality = Math.min(1.0, context.tool_results_used.length / expectedToolCount);
-
-    // Combined confidence
-    return Math.min(1.0, toolCoverage * 0.7 + toolQuality * 0.3);
+    return scoreStructuredSignals(
+      this.toStructuredSignals(context.signals),
+      context.verification_coverage
+    );
   }
 
   /**
    * Get human-readable explanation for score
    */
-  static explainScore(_signals: SignalSet): string[] {
-    const explanations: string[] = [];
+  static explainScore(signals: SignalSet): string[] {
+    return this.toStructuredSignals(signals).map((s) => `${s.label} (${s.points > 0 ? '+' : ''}${s.points})`);
+  }
 
-    // TODO: Generate explanations for each signal
-    // Example:
-    // if (signals.upfront_payment_request) {
-    //   explanations.push("Upfront payment request detected (+35 points)");
-    // }
-
-    return explanations;
+  private static toStructuredSignals(signals: SignalSet): StructuredSignal[] {
+    const out: StructuredSignal[] = [];
+    if (signals.upfront_payment_request) {
+      out.push({
+        id: 'upfront_payment_request',
+        label: 'Up-front payment requested',
+        category: 'red',
+        points: 40,
+        evidence: { source: 'legacy_signal_set', detail: 'Legacy signal set marked upfront payment request' },
+      });
+    }
+    if (signals.email_domain_mismatch) {
+      out.push({
+        id: 'email_domain_mismatch',
+        label: 'Recruiter email/domain mismatch',
+        category: 'red',
+        points: 22,
+        evidence: { source: 'legacy_signal_set', detail: 'Legacy signal set marked email/domain mismatch' },
+      });
+    }
+    if (signals.dns_records_weak) {
+      out.push({
+        id: 'dns_records_weak',
+        label: 'Weak or missing domain records',
+        category: 'red',
+        points: 12,
+        evidence: { source: 'legacy_signal_set', detail: 'Legacy signal set marked weak DNS records' },
+      });
+    }
+    if (signals.url_belongs_to_different_domain) {
+      out.push({
+        id: 'url_belongs_to_different_domain',
+        label: 'Application URL uses a different domain',
+        category: 'red',
+        points: 15,
+        evidence: { source: 'legacy_signal_set', detail: 'Legacy signal set marked off-domain URL' },
+      });
+    }
+    const registry = signals.company_registry_match;
+    if (registry) {
+      out.push({
+        id: registry.present ? 'company_registered' : 'company_not_in_registry',
+        label: registry.present ? 'Company registered' : 'Company not found in registry',
+        category: registry.present ? 'positive' : 'red',
+        points: registry.present ? -15 : 12,
+        evidence: { source: 'legacy_signal_set', detail: 'Legacy signal set included company registry status' },
+      });
+    }
+    const age = signals.recruiter_domain_age;
+    if (age) {
+      const young = age.red_flag || age.days < 180;
+      out.push({
+        id: young ? 'new_recruiter_domain' : 'established_domain',
+        label: young ? `Recruiter domain only ${age.days} days old` : 'Established recruiter domain',
+        category: young ? 'red' : 'positive',
+        points: young ? (age.days < 90 ? 20 : 10) : -10,
+        evidence: { source: 'legacy_signal_set', detail: `Legacy signal set reported domain age ${age.days} days` },
+      });
+    }
+    return out;
   }
 }

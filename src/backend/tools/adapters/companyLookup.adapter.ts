@@ -38,6 +38,7 @@ export async function companyLookupAdapter(input: {
         type: result.company?.type,
         jurisdiction: result.company?.jurisdiction,
         officers: result.company?.officers || [],
+        checked: result.checked || false,
         cached: result.cached || false,
       },
       duration: Date.now() - startTime,

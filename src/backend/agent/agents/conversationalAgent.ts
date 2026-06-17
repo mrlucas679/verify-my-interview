@@ -10,6 +10,7 @@ import { ToolOrchestrator } from '../../tools';
 import { toolSchemas } from '../toolSchemas';
 import { entityGraph } from '../../network/entityGraph';
 import { ToolResult } from '../../../types/tool_results';
+import { logger } from '../../observability/logger';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -52,8 +53,12 @@ const TOOL_SPECS: FunctionToolSpec[] = [
 async function executeChatTool(
   tools: ToolOrchestrator,
   name: string,
-  args: Record<string, any>
+  args: Record<string, any>,
+  signal?: AbortSignal
 ): Promise<ToolResult> {
+  if (signal?.aborted) {
+    return { tool: name, success: false, error: 'chat tool call aborted' };
+  }
   if (name === 'graph_lookup') {
     const start = Date.now();
     try {
@@ -81,7 +86,7 @@ async function executeChatTool(
       };
     }
   }
-  return tools.execute(name, args);
+  return tools.execute(name, args, signal);
 }
 
 export class ConversationalAgent {
@@ -101,11 +106,11 @@ export class ConversationalAgent {
           instructions: this.instructions(ctx),
           messages: history.slice(-12),
           tools: TOOL_SPECS,
-          toolExecutor: (name, args) => executeChatTool(this.tools, name, args),
+          toolExecutor: (name, args, signal) => executeChatTool(this.tools, name, args, signal),
         });
         return { reply: finalText.trim() || (await this.fallback(ctx, history)), engine: 'foundry' };
       } catch (e) {
-        console.error('[Chat] Foundry failed, using fallback:', e instanceof Error ? e.message : e);
+        logger.warn(`[Chat] Foundry failed, using fallback: ${e instanceof Error ? e.message : e}`);
       }
     }
     return { reply: await this.fallback(ctx, history), engine: 'deterministic' };

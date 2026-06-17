@@ -19,29 +19,3 @@ export interface ToolResult {
   /** True when the result was served from the orchestrator cache */
   cached?: boolean;
 }
-
-export interface ToolCache {
-  [key: string]: {
-    result: Record<string, any>;
-    timestamp: Date;
-    ttl_ms: number;
-  };
-}
-
-export interface ToolBudget {
-  max_calls: number;
-  max_searches: number;
-  max_url_scans: number;
-  calls_used: number;
-  searches_used: number;
-  url_scans_used: number;
-}
-
-export interface ToolExecutionPlan {
-  tools_to_call: string[];
-  call_order: string[];
-  parallelizable: {
-    [group: number]: string[];
-  };
-  budget_estimate: number;
-}

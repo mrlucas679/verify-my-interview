@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Send, Loader2, MessageSquare } from 'lucide-react';
-import { chat, type ChatMessage, type CaseContext } from '../lib/api';
+import { ApiError, chat, type ChatMessage, type CaseContext } from '../lib/api';
 import { useCase } from '../store/caseStore';
 
 const SUGGESTIONS = [
@@ -10,16 +10,37 @@ const SUGGESTIONS = [
   'How do I report it?',
 ];
 
+function detectiveFailure(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.code === 'CLIENT_TIMEOUT') {
+      return 'I could not finish that reply in time. Ask one shorter question and I will try again.';
+    }
+    if (error.code === 'CHAT_BAD_PAYLOAD') {
+      return 'I could not read this case well enough to answer safely. Start a new check, then ask again.';
+    }
+    if (error.status >= 500 || error.code === 'CHAT_RUNTIME_ERROR') {
+      return 'I cannot answer this follow-up right now. The report is still available, and you can try again in a moment.';
+    }
+  }
+  return error instanceof Error
+    ? error.message
+    : 'I cannot answer this follow-up right now. Please try again.';
+}
+
 export function ChatPanel() {
   const { result, lastEvidence } = useCase();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const inFlightRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   if (!result) return null;
 
@@ -38,21 +59,26 @@ export function ChatPanel() {
 
   async function send(text: string) {
     const content = text.trim();
-    if (!content || loading) return;
+    if (!content || inFlightRef.current) return;
+    inFlightRef.current = true;
+    const controller = new AbortController();
+    abortRef.current = controller;
     const next = [...messages, { role: 'user' as const, content }];
     setMessages(next);
     setInput('');
     setLoading(true);
     try {
-      const { reply } = await chat(ctx, next);
+      const { reply } = await chat(ctx, next, { signal: controller.signal });
       setMessages([...next, { role: 'assistant', content: reply }]);
-    } catch {
-      setMessages([
-        ...next,
-        { role: 'assistant', content: 'Sorry — I could not respond just now. Please try again.' },
-      ]);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setMessages([...next, { role: 'assistant', content: detectiveFailure(error) }]);
     } finally {
-      setLoading(false);
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        inFlightRef.current = false;
+        setLoading(false);
+      }
     }
   }
 
@@ -60,7 +86,7 @@ export function ChatPanel() {
     <div className="surface p-5">
       <div className="mb-3 flex items-center gap-2">
         <MessageSquare className="h-4 w-4 text-accent" />
-        <span className="text-sm font-medium text-slate-100">Ask the detective</span>
+        <span className="text-sm font-medium text-slate-100">Ask about this report</span>
       </div>
 
       {messages.length === 0 && (
@@ -99,7 +125,7 @@ export function ChatPanel() {
         {loading && (
           <div className="flex justify-start">
             <div className="surface-2 flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-sm text-muted">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> thinking…
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Reviewing the report...
             </div>
           </div>
         )}
@@ -113,7 +139,7 @@ export function ChatPanel() {
           onKeyDown={(e) => {
             if (e.key === 'Enter') send(input);
           }}
-          placeholder="Ask a follow-up about this case…"
+          placeholder="Ask what this means, what to do next, or how to reply safely..."
           className="flex-1 rounded-lg border border-line bg-ink-900 px-3 py-2.5 text-sm text-slate-100 placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
         />
         <button

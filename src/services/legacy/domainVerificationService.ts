@@ -48,6 +48,7 @@ export class DomainVerificationService {
   private disposableDomainSet: Set<string>;
   private cache = new Map<string, { data: DomainVerificationResult; timestamp: number }>();
   private CACHE_TTL = 60 * 60 * 1000; // 1 hour
+  private MAX_CACHE_ENTRIES = 500;
 
   constructor() {
     this.disposableDomainSet = new Set(disposableDomains as string[]);
@@ -91,11 +92,20 @@ export class DomainVerificationService {
       // Disposable: local blocklist OR the reputation provider's verdict.
       result.disposable = this.disposableDomainSet.has(domain) || Boolean(emailRep?.isDisposable);
 
-      this.cache.set(cacheKey, { data: result, timestamp: Date.now() });
+      this.setCache(cacheKey, result);
       return result;
     } catch (error) {
       return { error: error instanceof Error ? error.message : 'Unknown error' };
     }
+  }
+
+  private setCache(cacheKey: string, data: DomainVerificationResult): void {
+    while (this.cache.size >= this.MAX_CACHE_ENTRIES) {
+      const oldest = this.cache.keys().next().value;
+      if (!oldest) break;
+      this.cache.delete(oldest);
+    }
+    this.cache.set(cacheKey, { data, timestamp: Date.now() });
   }
 
   private async checkDNS(domain: string): Promise<{ MX: string[]; A: string[]; AAAA: string[] }> {

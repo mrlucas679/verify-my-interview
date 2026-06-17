@@ -16,9 +16,92 @@ import { AgentToolCall } from './types';
 
 const ACTIVE_RUN_STATUSES = ['queued', 'in_progress', 'requires_action'];
 const MAX_RUN_CYCLES = 30;
+const MAX_TURN_ATTEMPTS = 2;
+const MAX_PROMPT_TOKENS = 20_000;
+const MAX_COMPLETION_TOKENS = 4_096;
+const DEFAULT_TURN_DEADLINE_MS = 10_000;
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+class FoundryDeadlineError extends Error {
+  constructor(label: string) {
+    super(`Foundry deadline reached for "${label}"`);
+    this.name = 'FoundryDeadlineError';
+  }
+}
+
+function abortError(signal: AbortSignal, fallback: string): Error {
+  const reason = signal.reason;
+  return reason instanceof Error ? reason : new Error(fallback);
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw abortError(signal, 'Foundry operation aborted');
+}
+
+function timeoutSignal(ms: number): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`Operation exceeded ${ms}ms`)), ms);
+  timer.unref?.();
+  return controller.signal;
+}
+
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(abortError(signal, 'Foundry delay aborted'));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(abortError(signal, 'Foundry delay aborted'));
+    };
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function turnDeadlineMs(): number {
+  const configured = Number(process.env.VMI_FOUNDRY_TURN_TIMEOUT_MS);
+  if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_TURN_DEADLINE_MS;
+  return Math.max(2_000, Math.min(60_000, configured));
+}
+
+async function withDeadline<T>(
+  workFactory: (signal: AbortSignal) => Promise<T>,
+  label: string
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const work = workFactory(controller.signal);
+  const deadline = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new FoundryDeadlineError(label);
+      controller.abort(error);
+      reject(error);
+    }, turnDeadlineMs());
+    timer.unref?.();
+  });
+
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    void work.catch((error) => {
+      console.warn(
+        `[FoundryRunner] Late completion after deadline for ${label}: ${
+          error instanceof Error ? error.message : error
+        }`
+      );
+    });
+  }
+}
+
+function operationOptions(signal: AbortSignal): { abortSignal: AbortSignal } {
+  return { abortSignal: signal };
 }
 
 export interface FoundrySettings {
@@ -53,7 +136,18 @@ export interface AgentTurnOptions {
   /** Function tools the agent may call (empty for pure-reasoning agents). */
   tools?: FunctionToolSpec[];
   /** Executes a tool call requested by the agent. Required if `tools` is set. */
-  toolExecutor?: (toolName: string, args: Record<string, any>) => Promise<ToolResult>;
+  toolExecutor?: (
+    toolName: string,
+    args: Record<string, any>,
+    signal: AbortSignal
+  ) => Promise<ToolResult>;
+  /**
+   * Constrain the model to emit a valid JSON object. Azure AI Agents Service
+   * supports only `text` | `json_object` (NOT strict json_schema — that is an
+   * Azure OpenAI chat/responses feature). JSON mode guarantees the reply parses,
+   * so reasoning agents don't need free-text salvage/sanitisation.
+   */
+  responseFormat?: 'json_object';
 }
 
 export interface AgentTurnResult {
@@ -82,6 +176,37 @@ export class FoundryRunner {
 
   /** Run a single agent turn end-to-end and return its final message + tool calls. */
   async runTurn(options: AgentTurnOptions): Promise<AgentTurnResult> {
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= MAX_TURN_ATTEMPTS; attempt++) {
+      try {
+        return await withDeadline((signal) => this.runTurnOnce(options, signal), options.name);
+      } catch (error) {
+        const captured = error instanceof Error ? error : new Error(String(error));
+        lastError = captured;
+        if (!this.shouldRetry(captured) || attempt === MAX_TURN_ATTEMPTS) break;
+        console.warn(
+          `[FoundryRunner] ${options.name} attempt ${attempt} failed (${captured.message}); retrying once.`
+        );
+      }
+    }
+    throw lastError ?? new Error(`Foundry run for "${options.name}" failed`);
+  }
+
+  private shouldRetry(error: Error): boolean {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes('incomplete') ||
+      message.includes('timeout') ||
+      message.includes('exceeded') ||
+      message.includes('429') ||
+      message.includes('temporarily')
+    );
+  }
+
+  private async runTurnOnce(
+    options: AgentTurnOptions,
+    signal: AbortSignal
+  ): Promise<AgentTurnResult> {
     const client = this.getClient();
     const toolsUsed: AgentToolCall[] = [];
 
@@ -95,27 +220,52 @@ export class FoundryRunner {
     );
 
     let agentId: string | undefined;
+    let threadId: string | undefined;
+    let runId: string | undefined;
+    let runStatus: string | undefined;
     try {
+      throwIfAborted(signal);
       const agent = await client.createAgent(this.settings.modelDeployment, {
         name: options.name,
         instructions: options.instructions,
         tools: toolDefinitions,
+        ...operationOptions(signal),
       });
       agentId = agent.id;
 
-      const thread = await client.threads.create();
+      throwIfAborted(signal);
+      const thread = await client.threads.create(operationOptions(signal));
+      threadId = thread.id;
       if (options.messages && options.messages.length) {
         for (const m of options.messages) {
-          await client.messages.create(thread.id, m.role, m.content);
+          throwIfAborted(signal);
+          await client.messages.create(thread.id, m.role, m.content, operationOptions(signal));
         }
       } else {
-        await client.messages.create(thread.id, 'user', options.userMessage ?? '');
+        throwIfAborted(signal);
+        await client.messages.create(
+          thread.id,
+          'user',
+          options.userMessage ?? '',
+          operationOptions(signal)
+        );
       }
 
-      let run = await client.runs.create(thread.id, agentId);
+      throwIfAborted(signal);
+      let run = await client.runs.create(thread.id, agentId, {
+        maxPromptTokens: MAX_PROMPT_TOKENS,
+        maxCompletionTokens: MAX_COMPLETION_TOKENS,
+        parallelToolCalls: false,
+        temperature: 0.1,
+        ...(options.responseFormat ? { responseFormat: { type: options.responseFormat } } : {}),
+        ...operationOptions(signal),
+      });
+      runId = run.id;
+      runStatus = run.status;
       let cycles = 0;
 
       while (ACTIVE_RUN_STATUSES.includes(run.status)) {
+        throwIfAborted(signal);
         if (cycles++ >= MAX_RUN_CYCLES) {
           throw new Error(`Run exceeded ${MAX_RUN_CYCLES} cycles without completing`);
         }
@@ -136,36 +286,60 @@ export class FoundryRunner {
               args = {};
             }
 
+            throwIfAborted(signal);
             const result = options.toolExecutor
-              ? await options.toolExecutor(toolName, args)
+              ? await options.toolExecutor(toolName, args, signal)
               : { tool: toolName, success: false, error: 'No tool executor configured' };
+            throwIfAborted(signal);
 
             toolsUsed.push({ tool: toolName, input: args, result });
             toolOutputs.push({ toolCallId: toolCall.id, output: JSON.stringify(result) });
           }
 
-          run = await client.runs.submitToolOutputs(thread.id, run.id, toolOutputs);
+          throwIfAborted(signal);
+          run = await client.runs.submitToolOutputs(
+            thread.id,
+            run.id,
+            toolOutputs,
+            operationOptions(signal)
+          );
         } else {
-          await delay(1000);
-          run = await client.runs.get(thread.id, run.id);
+          await delay(1000, signal);
+          throwIfAborted(signal);
+          run = await client.runs.get(thread.id, run.id, operationOptions(signal));
         }
+        runId = run.id;
+        runStatus = run.status;
       }
 
       if (run.status !== 'completed') {
         const lastError = (run as any).lastError;
+        const incompleteDetails = (run as any).incompleteDetails;
         throw new Error(
           `Foundry run for "${options.name}" ended with status "${run.status}"${
             lastError?.message ? `: ${lastError.message}` : ''
-          }`
+          }${incompleteDetails?.reason ? ` (${incompleteDetails.reason})` : ''}`
         );
       }
 
-      const finalText = await this.readLatestAssistantMessage(client, thread.id);
+      throwIfAborted(signal);
+      const finalText = await this.readLatestAssistantMessage(client, thread.id, signal);
       return { finalText, toolsUsed };
     } finally {
+      if (signal.aborted && threadId && runId && runStatus && ACTIVE_RUN_STATUSES.includes(runStatus)) {
+        try {
+          await client.runs.cancel(threadId, runId, operationOptions(timeoutSignal(2_000)));
+        } catch (cancelError) {
+          console.warn(
+            `[FoundryRunner] Failed to cancel timed-out run ${runId} (${options.name}): ${
+              cancelError instanceof Error ? cancelError.message : cancelError
+            }`
+          );
+        }
+      }
       if (agentId) {
         try {
-          await client.deleteAgent(agentId);
+          await client.deleteAgent(agentId, operationOptions(timeoutSignal(2_000)));
         } catch (cleanupError) {
           console.warn(
             `[FoundryRunner] Failed to delete agent ${agentId} (${options.name}): ${
@@ -179,10 +353,12 @@ export class FoundryRunner {
 
   private async readLatestAssistantMessage(
     client: AgentsClient,
-    threadId: string
+    threadId: string,
+    signal: AbortSignal
   ): Promise<string> {
-    const messages = client.messages.list(threadId, { order: 'desc' });
+    const messages = client.messages.list(threadId, { order: 'desc', ...operationOptions(signal) });
     for await (const message of messages) {
+      throwIfAborted(signal);
       if (message.role !== 'assistant') continue;
       const textPart: any = message.content.find((part: any) => part.type === 'text');
       return textPart?.text?.value ?? '';

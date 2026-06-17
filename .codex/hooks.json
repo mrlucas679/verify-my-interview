@@ -1,0 +1,32 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\Admin\\OneDrive\\Documents\\New folder\\Verify My Interview\\.codex\\hooks\\session_start.ps1\"",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\Admin\\OneDrive\\Documents\\New folder\\Verify My Interview\\.codex\\hooks\\session_start.ps1\"",
+            "timeout": 10,
+            "statusMessage": "Loading Verify My Interview guardrails"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|shell_command|functions\\.shell_command",
+        "hooks": [
+          {
+            "type": "command",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\Admin\\OneDrive\\Documents\\New folder\\Verify My Interview\\.codex\\hooks\\pre_tool_use_guard.ps1\"",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\Admin\\OneDrive\\Documents\\New folder\\Verify My Interview\\.codex\\hooks\\pre_tool_use_guard.ps1\"",
+            "timeout": 10,
+            "statusMessage": "Checking project command guardrails"
+          }
+        ]
+      }
+    ]
+  }
+}

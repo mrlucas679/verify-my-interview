@@ -4,14 +4,31 @@ import { domainLookupAdapter } from './adapters/domainLookup.adapter';
 import { scamPatternDetectorAdapter } from './adapters/scamPatternDetector.adapter';
 import { webResearchAdapter } from './adapters/webResearch.adapter';
 import { phoneIntelAdapter } from './adapters/phoneIntel.adapter';
+import { logger } from '../observability/logger';
+
+// Process-wide tool-result cache. A fresh ToolOrchestrator is created per
+// request, so a per-instance cache would never survive across cases. Sharing
+// the store at module scope means identical identifier lookups (RDAP, registry,
+// phone, web) are reused across requests within the TTL. The per-instance call
+// BUDGET below is deliberately NOT shared — each case keeps its own 10-call cap.
+const sharedCache = new Map<string, { result: ToolResult; timestamp: number }>();
 
 export class ToolOrchestrator {
-  private cache: Map<string, { result: ToolResult; timestamp: number }> = new Map();
+  private cache = sharedCache;
   private callCount = 0;
   private maxCalls = 10;
   private readonly CACHE_TTL = 60 * 60 * 1000; // 1 hour
+  private readonly MAX_CACHE_ENTRIES = 200;
 
-  async execute(toolName: string, input: any): Promise<ToolResult> {
+  async execute(toolName: string, input: any, signal?: AbortSignal): Promise<ToolResult> {
+    if (signal?.aborted) {
+      return {
+        tool: toolName,
+        success: false,
+        error: 'Tool call aborted before execution',
+      };
+    }
+
     // Check call budget
     if (this.callCount >= this.maxCalls) {
       return {
@@ -25,16 +42,17 @@ export class ToolOrchestrator {
     const cacheKey = `${toolName}:${JSON.stringify(input)}`;
     const cached = this.cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
-      console.log(`[Tool] Cache hit: ${toolName}`);
+      logger.debug(`[Tool] Cache hit: ${toolName}`);
       return { ...cached.result, cached: true };
     }
 
     // Execute tool
-    console.log(`[Tool] Calling ${toolName} (${this.callCount + 1}/${this.maxCalls})`);
+    logger.info(`[Tool] Calling ${toolName} (${this.callCount + 1}/${this.maxCalls})`);
     this.callCount++;
     let result: ToolResult;
 
     try {
+      if (signal?.aborted) throw new Error('Tool call aborted before provider request');
       switch (toolName) {
         case 'lookup_company_registry':
           result = await companyLookupAdapter(input);
@@ -58,6 +76,13 @@ export class ToolOrchestrator {
             error: `Unknown tool: ${toolName}`,
           };
       }
+      if (signal?.aborted) {
+        return {
+          tool: toolName,
+          success: false,
+          error: 'Tool call aborted after provider request',
+        };
+      }
     } catch (error) {
       result = {
         tool: toolName,
@@ -68,6 +93,8 @@ export class ToolOrchestrator {
 
     // Cache result if successful
     if (result.success) {
+      this.evictExpiredCache();
+      this.evictOldestCacheEntry();
       this.cache.set(cacheKey, { result, timestamp: Date.now() });
     }
 
@@ -89,6 +116,19 @@ export class ToolOrchestrator {
 
   clearCache(): void {
     this.cache.clear();
+  }
+
+  private evictExpiredCache(): void {
+    const now = Date.now();
+    for (const [key, value] of this.cache) {
+      if (now - value.timestamp >= this.CACHE_TTL) this.cache.delete(key);
+    }
+  }
+
+  private evictOldestCacheEntry(): void {
+    if (this.cache.size < this.MAX_CACHE_ENTRIES) return;
+    const oldest = this.cache.keys().next().value;
+    if (oldest) this.cache.delete(oldest);
   }
 }
 

@@ -10,7 +10,7 @@ documents. No separate scoring path, ever.
 
 This document is **authoritative**: it records what actually shipped, the
 deliberate design decisions behind it (sourced from
-`.claude/orchestrator/PROJECT_STATE.md`), and the roadmap — so judges and future
+`.codex/orchestrator/PROJECT_STATE.md`), and the roadmap — so judges and future
 engineers can tell reality from aspiration. Where the original draft design and
 the shipped reality conflict, the shipped reality and the recorded decisions win;
 the superseded ideas are preserved in §10 ("Decisions & deviations") and the
@@ -313,10 +313,10 @@ Each shipped piece is mapped to its real source location. Items marked
 | Client transcription helper `transcribeAudio(blob, fileName)` → `{ text, durationSec, locale }` | **[done]** | `frontend/src/lib/api.ts` |
 | Voice recorder UI + "Tell Us What Happened" tab + transcript review | **[done]** (built in parallel) | `frontend/src/components/VoiceRecorder.tsx`, `frontend/src/pages/NewCase.tsx` |
 | `speechSynthesis` report read-back ("Listen") | **[done]** (built in parallel) | Report page (frontend) |
-| `AZURE_SPEECH_*` scrubbed during offline evals | **[next]** | `SCRUBBED_ENV` in `src/backend/scripts/runEvals.ts` (add per `CLAUDE.md` §3) |
-| Unit test for `sniffAudioType` positive/negative buffers | **[next]** | `tests/unit/guard.test.ts` (model on the existing `sniffUploadType` suite) |
-| Synthetic "voice narration" eval fixture | **[next]** | `tests/test_cases/` |
-| Fix 413 message to reflect the 25 MB audio cap | **[next]** | `src/backend/server.ts` shared error handler |
+| `AZURE_SPEECH_*` scrubbed during offline evals | **[done]** | `SCRUBBED_ENV` in `src/backend/scripts/runEvals.ts` |
+| Unit test for `sniffAudioType` positive/negative buffers | **[done]** | `tests/unit/guard.test.ts` |
+| Synthetic "voice narration" eval fixture | **[done]** | `tests/test_cases/voice_report_training_fee.json` |
+| Fix 413 message to reflect the 25 MB audio cap | **[done]** | `src/backend/server.ts` shared error handler |
 
 > Note: the offline eval harness needs **no audio** — a transcript is just text,
 > so a synthetic spoken-account fixture exercises the full `/analyze` path and
@@ -341,7 +341,7 @@ Each shipped piece is mapped to its real source location. Items marked
 ## 10. Decisions & deviations from the original draft
 
 The shipped MVP follows the binding decisions in
-`.claude/orchestrator/PROJECT_STATE.md`. Two of them are deliberate deviations
+`.codex/orchestrator/PROJECT_STATE.md`. Two of them are deliberate deviations
 from the product owner's original draft design; they are recorded here rather
 than silently dropped.
 

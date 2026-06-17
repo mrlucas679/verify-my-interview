@@ -19,6 +19,8 @@ import {
 } from './types';
 import { SEED_REPORTS } from './seedData';
 import { scamNetwork } from './scamNetwork';
+import { cosmosEnabled, listReports, saveReport } from '../data/cosmos';
+import { logger } from '../observability/logger';
 
 // --- Normalization (hard identifiers only) ----------------------------------
 
@@ -181,28 +183,48 @@ function build(reports: NetworkReport[]): BuiltGraph {
 
 // --- Service ------------------------------------------------------------------
 
+const MAX_LOCAL_REPORTS = 500;
+
 export class EntityGraphService {
   private built: BuiltGraph | null = null;
+  private refreshPromise: Promise<void> | null = null;
   /** Reports submitted while Azure Search is unconfigured (in-memory fallback). */
   private localReports: NetworkReport[] = [];
 
   /** Rebuild from the current corpus. Cheap (≤ a few hundred reports). */
   async refresh(): Promise<void> {
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.refreshInternal().finally(() => {
+        this.refreshPromise = null;
+      });
+    }
+    await this.refreshPromise;
+  }
+
+  private async refreshInternal(): Promise<void> {
     let reports: NetworkReport[] = [];
     if (scamNetwork.enabled) {
       try {
         reports = await scamNetwork.listAll();
       } catch (e) {
-        console.warn(
+        logger.warn(
           `[Graph] listAll failed, using seed data: ${e instanceof Error ? e.message : e}`
         );
       }
     }
     if (reports.length === 0) {
-      reports = [...SEED_REPORTS, ...this.localReports];
+      // Durable corpus: Cosmos-backed community reports (system of record) when
+      // configured, else the in-memory fallback. Seeds are always included.
+      const submitted = cosmosEnabled()
+        ? await listReports().catch((e) => {
+            logger.warn(`[Graph] Cosmos listReports failed: ${e instanceof Error ? e.message : e}`);
+            return this.localReports;
+          })
+        : this.localReports;
+      reports = [...SEED_REPORTS, ...submitted];
     }
     this.built = build(reports);
-    console.log(
+    logger.debug(
       `[Graph] Built entity graph: ${this.built.graph.nodes.length} nodes, ${this.built.graph.edges.length} edges from ${reports.length} reports.`
     );
   }
@@ -214,7 +236,19 @@ export class EntityGraphService {
 
   /** Add a report when the indexed network is unavailable, then rebuild. */
   async addLocalReport(report: NetworkReport): Promise<void> {
-    this.localReports.push(report);
+    if (cosmosEnabled()) {
+      try {
+        await saveReport(report); // durable system of record
+      } catch (e) {
+        logger.warn(`[Graph] Cosmos saveReport failed, keeping in memory: ${e instanceof Error ? e.message : e}`);
+        this.localReports.push(report);
+      }
+    } else {
+      this.localReports.push(report);
+      if (this.localReports.length > MAX_LOCAL_REPORTS) {
+        this.localReports = this.localReports.slice(-MAX_LOCAL_REPORTS);
+      }
+    }
     await this.refresh();
   }
 

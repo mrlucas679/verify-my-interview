@@ -58,6 +58,7 @@ export interface StageTrace {
   stage: StageName;
   engine: AgentEngine;
   summary: string;
+  fallback_reason?: string;
   duration_ms: number;
   findings: Finding[];
 }
@@ -70,6 +71,7 @@ export interface PipelineTrace {
   investigator_reasoning: string;
   critique: string;
   removed_claims: string[];
+  degraded_stages?: Array<{ stage: StageName; reason: string }>;
 }
 
 export interface SignalEvidence {
@@ -156,4 +158,29 @@ export interface AnalyzeResponse {
   signals: StructuredSignal[];
   matches: NetworkMatch[];
   graph: EntityGraph;
+  multiPass?: MultiPassResult;
+}
+
+export type MultiPassOutcome =
+  | 'Verified Legitimate'
+  | 'Likely Legitimate'
+  | 'Insufficient Evidence'
+  | 'Requires Human Review'
+  | 'Suspicious'
+  | 'High Risk Scam Indicators';
+
+export interface MultiPassReview {
+  pass: 'base_pipeline' | 'blind_verification' | 'skeptic_red_team';
+  conclusion: string;
+  support: string[];
+  challenges: string[];
+}
+
+export interface MultiPassResult {
+  status: 'single_pass_sufficient' | 'escalated';
+  reason: string;
+  outcome: MultiPassOutcome;
+  agreement: 'high' | 'medium' | 'low';
+  uncertainty: string[];
+  reviews: MultiPassReview[];
 }

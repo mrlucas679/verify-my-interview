@@ -5,7 +5,7 @@
     "title": "FTC Consumer Advice — Job Scams",
     "url": "https://consumer.ftc.gov/articles/job-scams",
     "excerpt": "Honest employers will never ask you to pay to get a job. Anyone who asks you to pay upfront for equipment, training, or onboarding — or pressures you to act immediately — is showing classic signs of a job scam.",
-    "signal_ids": ["upfront_payment_request", "urgency_pressure", "high_keyword_score"]
+    "signal_ids": ["upfront_payment_request", "urgency_pressure", "high_keyword_score", "training_fee_narrative"]
   },
   {
     "id": "ftc_gift_cards",
@@ -30,6 +30,14 @@
     "url": "https://www.ic3.gov/Media/Y2024/PSA240605",
     "excerpt": "Fraudsters posing as recruiters direct victims to make cryptocurrency payments to 'activate' accounts or unlock earnings. Any employer that requires crypto payments as a condition of work is operating a scam.",
     "signal_ids": ["upfront_payment_request", "network_infrastructure_match"]
+  },
+  {
+    "id": "ftc_spam_texts",
+    "source": "FTC",
+    "title": "FTC Consumer Advice — How to Recognize and Report Spam Text Messages",
+    "url": "https://consumer.ftc.gov/articles/how-recognize-and-report-spam-text-messages",
+    "excerpt": "Scammers send texts with offers and prompts designed to get a response. Replying — even to say STOP or YES — tells the sender your number is active and invites more scam messages. Do not reply; report and block the sender instead.",
+    "signal_ids": ["sms_reply_bait"]
   },
   {
     "id": "ftc_phishing",

@@ -1,0 +1,17 @@
+# Project-scoped Codex config for Verify My Interview.
+# Loads only when this trusted repo is active. This file does not start servers.
+
+[features]
+hooks = true
+
+[mcp_servers.openaiDeveloperDocs]
+url = "https://developers.openai.com/mcp"
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+default_tools_approval_mode = "auto"
+
+[mcp_servers.microsoftLearn]
+url = "https://learn.microsoft.com/api/mcp"
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+default_tools_approval_mode = "auto"

@@ -114,17 +114,33 @@ Higgsfield MCP (AI video/image generation — demo-video assets); GitHub via
 **Hooks (guardrails):** configured in `.claude/settings.json` if present —
 they intercept tool calls; treat hook output as user feedback, don't fight it.
 
-## Current state (2026-06-11)
+## Current state (2026-06-12)
 
-Shipped: 6-agent pipeline, entity graph + seeded ring, Sentinel UI, guidance
-citations, PII redaction (now applied at the `/analyze` boundary for ALL
-evidence channels), real external verification (WHOIS/Abstract/news), HTTP
-hardening (rate limits/validation/CSP/audit log), full Voice Investigation
-(record/upload → `/transcribe` Azure Speech → editable transcript → pipeline;
-report read-back via browser TTS), voice design doc. Gates: lint 0/0,
-jest 21/21, evals 11/11, npm audit 0.
-Open: live Azure rehearsal (incl. AZURE_SPEECH_* keys + webm/opus check),
-demo video, submission packaging.
+Shipped: 6-agent pipeline, entity graph + seeded ring, guidance citations,
+PII redaction at the `/analyze` boundary for ALL evidence channels, real
+external verification (WHOIS/Abstract/news), HTTP hardening, full Voice
+Investigation (Azure Speech verified LIVE, en-ZA), reply-bait smishing signal,
+semantic-match scaling + inconclusive floor, humanized findings, and the FINAL
+two-page UI: `/` verify slot (3D layer-stack hero, live entity chips,
+drag-drop) → `/report` stacked investigation dossier (sticky verdict bar,
+error boundary). Gates: lint 0/0, jest 43/43, evals 13/13, frontend tsc clean,
+root prod audit 0 high / 27 moderate (transitive @opentelemetry/core <2.8.0 via
+@azure/monitor-opentelemetry — no non-breaking fix), secret scan clean. Frontend
+dev-only esbuild/vite advisories accepted (see PRODUCTION_READINESS §Submission).
+Foundry adoption: evidence GATHERING is always deterministic (every relevant tool
+runs → complete coverage by construction). With `AZURE_AI_PROJECT_ENDPOINT` set,
+the Investigator/Critic/Report add a REASONING pass over the gathered results
+(JSON mode, `responseFormat: json_object`, no tool-calling) and the detective chat
+runs via Foundry (engine `mixed`); each degrades to a deterministic fallback. The
+scorer reads tool RESULTS, never the LLM prose. Foundry tool-CALLING lives in chat
+(user-driven, on-demand). Single canonical runtime: Express on Container Apps/App
+Service delegating to the `local/appTools` core (same core as CLI + MCP); the
+duplicate HTTP Azure Functions + PS1 packaging were removed (Functions return only
+as future Service Bus/Event Grid consumers). `package-lock.json` is committed.
+Open: Foundry IQ grounding for the Reporter (needs user Azure provisioning — see
+research/permanent-foundry-architecture.md); user-run `npm run seed:network`;
+fresh-terminal `npm start` (Foundry creds) + LIVE check of Foundry reasoning/chat;
+browser webm/opus check. Demo video: submitted.
 
 Orchestration state lives in `.claude/orchestrator/PROJECT_STATE.md`
 (decisions D1–D4, requirements coverage, risks) — read it before resuming work.
