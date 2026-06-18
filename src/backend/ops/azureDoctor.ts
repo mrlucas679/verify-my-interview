@@ -1,4 +1,4 @@
-import { execFileSync } from 'child_process';
+import { execFileSync, type ExecFileSyncOptionsWithStringEncoding } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -119,11 +119,7 @@ function envChecks(requireLive: boolean): DoctorCheck[] {
 function azChecks(skipAz: boolean): DoctorCheck[] {
   if (skipAz) return [check('azure-cli', 'warn', 'Azure CLI check skipped')];
   try {
-    const output = execFileSync('az', ['account', 'show', '--query', '{name:name,id:id}', '-o', 'json'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 10_000,
-    });
+    const output = runAzAccountShow();
     const parsed = JSON.parse(output) as { name?: string; id?: string };
     return [
       check(
@@ -135,6 +131,19 @@ function azChecks(skipAz: boolean): DoctorCheck[] {
   } catch {
     return [check('azure-cli', 'warn', 'Azure CLI is unavailable or not logged in')];
   }
+}
+
+function runAzAccountShow(): string {
+  const options: ExecFileSyncOptionsWithStringEncoding = {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 10_000,
+  };
+  if (process.platform !== 'win32') {
+    return execFileSync('az', ['account', 'show', '-o', 'json'], options);
+  }
+  const shell = process.env.ComSpec?.trim() || 'cmd.exe';
+  return execFileSync(shell, ['/d', '/s', '/c', 'az account show -o json'], options);
 }
 
 export function runAzureDoctor(options: AzureDoctorOptions = {}): AzureDoctorReport {
