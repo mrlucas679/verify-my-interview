@@ -13,7 +13,7 @@
 
 import crypto from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
-import { Identity, AuthError, authEnabled, isAdmin, verifyToken } from './identity';
+import { Identity, AuthError, adminViaEmailAllowlist, authEnabled, isAdmin, verifyToken } from './identity';
 import { cosmosEnabled, consumeAnonTrial, recordUsage, upsertUser } from '../data/cosmos';
 import { logger } from '../observability/logger';
 
@@ -169,6 +169,11 @@ export function requireAdmin(req: AuthedRequest, res: Response, next: NextFuncti
   if (!isAdmin(req.identity)) {
     res.status(403).json({ error: 'Administrator access is required for this action.', code: 'forbidden' });
     return;
+  }
+  // Observable break-glass: record when admin was granted by the TEMPORARY email
+  // allow-list rather than an Entra app role. Content-free (no email) per POPIA.
+  if (adminViaEmailAllowlist(req.identity)) {
+    logger.warn('[Auth] admin action authorized via break-glass AUTH_ADMIN_EMAILS — assign an Entra app role to replace this.');
   }
   next();
 }

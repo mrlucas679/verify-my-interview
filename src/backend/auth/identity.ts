@@ -58,6 +58,17 @@ export function isAdmin(identity: Identity | null | undefined): boolean {
   return Boolean(email && adminEmails().includes(email));
 }
 
+/**
+ * True when admin would be granted ONLY by the break-glass email allow-list (not by
+ * an app role). Lets the request layer log when the temporary fallback is exercised,
+ * so its use is observable and you know a proper Entra role still needs assigning.
+ */
+export function adminViaEmailAllowlist(identity: Identity | null | undefined): boolean {
+  if (!identity || identity.roles.includes('admin')) return false;
+  const email = identity.email?.trim().toLowerCase();
+  return Boolean(email && adminEmails().includes(email));
+}
+
 export class AuthError extends Error {}
 
 export function authEnabled(): boolean {

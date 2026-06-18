@@ -6,7 +6,12 @@
 // These are the security-critical pure functions; they must be exhaustively tested
 // because a wrong answer means privilege escalation or cross-user data exposure.
 
-import { authEnabled, isAdmin, type Identity } from '../../src/backend/auth/identity';
+import {
+  adminViaEmailAllowlist,
+  authEnabled,
+  isAdmin,
+  type Identity,
+} from '../../src/backend/auth/identity';
 import { isOwnedEvidenceId } from '../../src/backend/storage/blob';
 
 function identity(partial: Partial<Identity>): Identity {
@@ -67,6 +72,23 @@ describe('isAdmin', () => {
   it('does not grant admin when the identity has no email but a list is set', () => {
     process.env.AUTH_ADMIN_EMAILS = 'boss@example.com';
     expect(isAdmin(identity({ email: undefined }))).toBe(false);
+  });
+});
+
+describe('adminViaEmailAllowlist (break-glass observability)', () => {
+  const savedEmails = process.env.AUTH_ADMIN_EMAILS;
+  afterEach(() => {
+    if (savedEmails === undefined) delete process.env.AUTH_ADMIN_EMAILS;
+    else process.env.AUTH_ADMIN_EMAILS = savedEmails;
+  });
+
+  it('is true ONLY when the email list (not a role) is what grants admin', () => {
+    process.env.AUTH_ADMIN_EMAILS = 'boss@example.com';
+    expect(adminViaEmailAllowlist(identity({ email: 'boss@example.com' }))).toBe(true);
+    // Granted by role → not a break-glass grant.
+    expect(adminViaEmailAllowlist(identity({ email: 'boss@example.com', roles: ['admin'] }))).toBe(false);
+    // Not an admin at all.
+    expect(adminViaEmailAllowlist(identity({ email: 'nobody@example.com' }))).toBe(false);
   });
 });
 

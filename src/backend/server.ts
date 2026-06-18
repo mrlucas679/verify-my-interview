@@ -16,6 +16,7 @@ import multer from 'multer';
 import { scamNetwork } from './network/scamNetwork';
 import { entityGraph } from './network/entityGraph';
 import { startEventConsumer } from './events/serviceBus';
+import { assertSecureConfig } from './config/security';
 import type { CaseContext, ChatMessage } from './agent/agents/conversationalAgent';
 import {
   LocalHttpError,
@@ -557,6 +558,15 @@ app.use((err: any, req: Request, res: Response, _next: any) => {
 
 // Start server
 if (require.main === module) {
+  // Fail fast in production: refuse to boot with a silently-insecure config
+  // (missing trust-proxy, auth, durable store, or anon-trial salt). No-op in dev;
+  // ALLOW_INSECURE=1 downgrades to warnings. This is the network runtime only.
+  try {
+    assertSecureConfig();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   app.listen(PORT, () => {
     console.log(`[Server] Verify My Interview API listening on port ${PORT}`);
     console.log(`[Server] Health check: http://localhost:${PORT}/health`);
