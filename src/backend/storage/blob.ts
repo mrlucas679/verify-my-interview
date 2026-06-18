@@ -20,10 +20,28 @@ import { logger } from '../observability/logger';
 
 const CONTAINER = 'evidence';
 const MAX_BYTES = 25 * 1024 * 1024; // matches the largest upload cap (audio)
-const ID_RE = /^[a-f0-9]{1,128}\/[a-f0-9]{32}(?:\.[a-z0-9]{1,8})?$/;
+// A user id is an Entra `oid` (GUID, e.g. 4f8e...-...-...) or `sub` (pairwise,
+// base64url) — both can contain letters, digits, hyphens and underscores. The
+// file segment is the random hex we generate. Anchored at both ends so nothing
+// before/after the pattern (e.g. "../") can sneak in.
+const USER_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+const ID_RE = /^[A-Za-z0-9_-]{1,128}\/[a-f0-9]{32}(?:\.[a-z0-9]{1,8})?$/;
 
 export function blobEnabled(): boolean {
   return Boolean(process.env.AZURE_STORAGE_ACCOUNT || process.env.AZURE_STORAGE_CONNECTION_STRING);
+}
+
+/**
+ * Pure ownership check (exported for unit testing): an evidenceId is readable by
+ * a user ONLY if it is well-formed AND sits under that user's `{userId}/` prefix.
+ * This is the IDOR guard — it must reject path traversal, cross-user ids, and any
+ * id whose prefix merely starts-with another user's id (the trailing "/" prevents
+ * "userA" from matching "userAB/..."). Kept dependency-free so it is trivially
+ * testable in isolation.
+ */
+export function isOwnedEvidenceId(userId: string, evidenceId: string): boolean {
+  if (!USER_ID_RE.test(userId) || !ID_RE.test(evidenceId)) return false;
+  return evidenceId.startsWith(`${userId}/`);
 }
 
 let containerPromise: Promise<ContainerClient> | null = null;
@@ -63,7 +81,7 @@ export async function putEvidence(
   if (!blobEnabled()) throw new Error('blob storage is not configured');
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) throw new Error('empty evidence buffer');
   if (buffer.length > MAX_BYTES) throw new Error('evidence file too large to store');
-  if (!/^[a-f0-9]{1,128}$/.test(userId)) throw new Error('invalid userId');
+  if (!USER_ID_RE.test(userId)) throw new Error('invalid userId');
   const safeExt = ext && /^[a-z0-9]{1,8}$/.test(ext) ? `.${ext}` : '';
   const evidenceId = `${userId}/${randomBytes(16).toString('hex')}${safeExt}`;
   const container = await getContainer();
@@ -83,7 +101,7 @@ export async function getEvidence(
   evidenceId: string
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
   if (!blobEnabled()) return null;
-  if (!ID_RE.test(evidenceId) || !evidenceId.startsWith(`${userId}/`)) return null;
+  if (!isOwnedEvidenceId(userId, evidenceId)) return null;
   try {
     const container = await getContainer();
     const blob = container.getBlockBlobClient(evidenceId);

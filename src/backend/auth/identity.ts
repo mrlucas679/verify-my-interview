@@ -33,9 +33,29 @@ export interface Identity {
   roles: string[];
 }
 
-/** True when the caller holds the administrator app-role. */
+/** Fixed admin allow-list (AUTH_ADMIN_EMAILS) — normalised, deduped. */
+function adminEmails(): string[] {
+  return (process.env.AUTH_ADMIN_EMAILS || '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Authorization check for administrator actions. Admin status is granted by EITHER
+ * mechanism, both anchored to the cryptographically VERIFIED token (so neither can
+ * be forged client-side):
+ *   1. a fixed `AUTH_ADMIN_EMAILS` allow-list matched against the token's verified
+ *      email (the operator's preferred, explicit approach — no Entra role wiring
+ *      needed), or
+ *   2. the `admin` app-role in the token's `roles` claim.
+ * Fails closed: no token, no email, and no configured admins ⇒ not an admin.
+ */
 export function isAdmin(identity: Identity | null | undefined): boolean {
-  return Boolean(identity?.roles?.includes('admin'));
+  if (!identity) return false;
+  if (identity.roles.includes('admin')) return true;
+  const email = identity.email?.trim().toLowerCase();
+  return Boolean(email && adminEmails().includes(email));
 }
 
 export class AuthError extends Error {}
