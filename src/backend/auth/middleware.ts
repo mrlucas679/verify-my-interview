@@ -13,7 +13,7 @@
 
 import crypto from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
-import { Identity, AuthError, authEnabled, verifyToken } from './identity';
+import { Identity, AuthError, authEnabled, isAdmin, verifyToken } from './identity';
 import { cosmosEnabled, consumeAnonTrial, recordUsage, upsertUser } from '../data/cosmos';
 import { logger } from '../observability/logger';
 
@@ -144,6 +144,30 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
   }
   if (!req.identity) {
     res.status(401).json({ error: 'Please sign in to access your account.', code: 'auth_required' });
+    return;
+  }
+  next();
+}
+
+/**
+ * AUTHORIZATION gate for destructive / cross-user operations (deleting community
+ * data, moderating another user's submissions). Authentication proves WHO you are;
+ * this proves you're ALLOWED. Self-service erasure of your OWN data does NOT use
+ * this — ownership is enforced by scoping those queries to req.identity.userId.
+ * Reserve requireAdmin for actions on data the caller does not own. 401 when not
+ * signed in, 403 when signed in without the admin role.
+ */
+export function requireAdmin(req: AuthedRequest, res: Response, next: NextFunction): void {
+  if (!authEnabled()) {
+    res.status(503).json({ error: 'Administration is not enabled on this server.' });
+    return;
+  }
+  if (!req.identity) {
+    res.status(401).json({ error: 'Please sign in.', code: 'auth_required' });
+    return;
+  }
+  if (!isAdmin(req.identity)) {
+    res.status(403).json({ error: 'Administrator access is required for this action.', code: 'forbidden' });
     return;
   }
   next();

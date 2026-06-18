@@ -23,6 +23,19 @@ export interface Identity {
   name?: string;
   /** Upstream social IdP if Entra surfaced it ("google.com" / "apple.com"). */
   provider?: string;
+  /**
+   * Authorization roles from the token's `roles` claim (Entra app roles). The
+   * TOKEN is the single source of truth for authorization — we never read a
+   * role back from the database, so tampering with a `users` document can never
+   * escalate privilege (least-privilege + explicit-over-implicit). Empty ⇒ a
+   * plain user; "admin" grants destructive/moderation actions.
+   */
+  roles: string[];
+}
+
+/** True when the caller holds the administrator app-role. */
+export function isAdmin(identity: Identity | null | undefined): boolean {
+  return Boolean(identity?.roles?.includes('admin'));
 }
 
 export class AuthError extends Error {}
@@ -55,6 +68,17 @@ function cap(value: unknown, maxLen: number): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim().slice(0, maxLen) : undefined;
 }
 
+/** Read the bounded `roles` claim (Entra app roles) as a clean string list. */
+function rolesFrom(payload: JWTPayload): string[] {
+  const raw = (payload as Record<string, unknown>).roles;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((r): r is string => typeof r === 'string')
+    .map((r) => r.trim().slice(0, 64))
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
 function toIdentity(payload: JWTPayload): Identity {
   const userId = cap(payload.oid ?? payload.sub, 128);
   if (!userId) throw new AuthError('token has no subject');
@@ -63,6 +87,7 @@ function toIdentity(payload: JWTPayload): Identity {
     email: cap(payload.email ?? (payload as Record<string, unknown>).preferred_username, 254),
     name: cap(payload.name, 120),
     provider: cap((payload as Record<string, unknown>).idp, 64),
+    roles: rolesFrom(payload),
   };
 }
 

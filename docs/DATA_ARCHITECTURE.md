@@ -116,9 +116,23 @@ removes the current "Search is the only store" fragility.
 5. ⬜ **Frontend:** Google/Apple sign-in, account UI, case history, consent flows;
    optional SWA/Vercel split. _(not started — out of current backend scope)_
 
-**Endpoints added (slices ③–④):** `GET /me`, `DELETE /me` (erasure), `GET /cases`,
-`GET /cases/:id`, `POST /evidence`, `GET /evidence/:fileId`. All require a valid
-bearer token; all degrade to 503 when their backing service is unconfigured.
+**Endpoints added (slices ③–④):** `GET /me`, `DELETE /me` (self-service erasure),
+`PUT /me/consent` (evidence-storage consent), `GET /cases`, `GET /cases/:id`,
+`POST /evidence`, `GET /evidence/:fileId`, and `DELETE /reports/:id` (admin
+moderation). All require a valid bearer token; all degrade to 503 when their
+backing service is unconfigured.
+
+**AuthN vs AuthZ (explicit, least-privilege):** authentication (a valid Entra token)
+proves WHO the caller is; authorization decides what they may do.
+- **Self-service** actions (`DELETE /me`, `GET /cases`, evidence read/write) are scoped
+  to the caller's own `userId` — a user can only ever touch their OWN data; there is no
+  `userId` parameter to spoof.
+- **Destructive cross-user / shared-data** actions (`DELETE /reports/:id`) require the
+  **`admin` app-role** (`requireAdmin` → 403 otherwise). Roles come from the token's
+  `roles` claim ONLY — never from a `users` document — so DB tampering cannot escalate
+  privilege. Fails closed: with no admin assigned, no one can delete community data.
+- **Consent gate:** `POST /evidence` refuses (403) until the user has recorded explicit
+  consent via `PUT /me/consent` (POPIA lawful basis for evidence retention).
 
 **Provisioning still required to run these LIVE:** an Entra External ID tenant + app
 registration (set `AUTH_ISSUER`/`AUTH_AUDIENCE`), Google + Apple social connections in

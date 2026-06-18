@@ -171,6 +171,18 @@ export async function saveReport(report: NetworkReport): Promise<void> {
     .updateOne({ _id: report.reportId }, { $set: report }, { upsert: true });
 }
 
+/**
+ * Delete a community report from the durable store (admin moderation — e.g. a
+ * false or abusive submission). Returns true if a document was removed. The
+ * caller is responsible for the authorization check (requireAdmin) and for
+ * re-indexing the derived Search index.
+ */
+export async function deleteReport(reportId: string): Promise<boolean> {
+  const db = await getDb();
+  const res = await db.collection<ReportDoc>(REPORTS).deleteOne({ _id: reportId });
+  return res.deletedCount > 0;
+}
+
 /** List durable community reports (bounded). */
 export async function listReports(): Promise<NetworkReport[]> {
   const db = await getDb();

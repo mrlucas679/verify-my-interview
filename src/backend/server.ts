@@ -23,6 +23,7 @@ import {
   analyzeEvidenceLocal,
   chatLocal,
   deleteAccountLocal,
+  deleteReportLocal,
   getCaseLocal,
   getEvidenceLocal,
   getProfileLocal,
@@ -33,6 +34,7 @@ import {
   networkStatsLocal,
   recordCaseLocal,
   saveSharedReportLocal,
+  setConsentLocal,
   storeEvidenceLocal,
   submitReportLocal,
   transcribeAudioLocal,
@@ -42,6 +44,7 @@ import {
   AuthedRequest,
   attachIdentity,
   enforceAnalyzeAccess,
+  requireAdmin,
   requireAuth,
 } from './auth/middleware';
 import {
@@ -258,6 +261,25 @@ app.post(
 );
 
 /**
+ * DELETE /reports/:id
+ * Admin moderation — remove a false/abusive community report from the corpus.
+ * AUTHORIZATION: requires the admin app-role (requireAdmin); a plain signed-in
+ * user gets 403. Anyone deleting shared data must be an administrator.
+ */
+app.delete(
+  '/reports/:id',
+  rateLimit({ name: 'report', windowMs: 60_000, max: 20 }),
+  requireAdmin,
+  async (req: Request, res: Response) => {
+    try {
+      res.json(await deleteReportLocal(req.params.id));
+    } catch (error) {
+      sendError(res, error, 'Failed to delete report');
+    }
+  }
+);
+
+/**
  * POST /share
  * Opt-in: persist the finished (already redacted) report result under an
  * unguessable id so the user can revisit or share it via a link. Stores the
@@ -323,6 +345,27 @@ app.delete(
       res.json(await deleteAccountLocal(req.identity!.userId));
     } catch (error) {
       sendError(res, error, 'Failed to delete account');
+    }
+  }
+);
+
+/**
+ * PUT /me/consent
+ * Record the user's explicit consent to store evidence files (POPIA). Body:
+ * { store_evidence: boolean }. Required before POST /evidence will accept a file.
+ */
+app.put(
+  '/me/consent',
+  rateLimit({ name: 'account', windowMs: 60_000, max: 30 }),
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      if (typeof req.body?.store_evidence !== 'boolean') {
+        return res.status(400).json({ error: 'Field "store_evidence" (boolean) is required.' });
+      }
+      res.json(await setConsentLocal(req.identity!.userId, req.body.store_evidence));
+    } catch (error) {
+      sendError(res, error, 'Failed to update consent');
     }
   }
 );
@@ -463,6 +506,8 @@ app.get('/docs', (_req: Request, res: Response) => {
       'GET /shared/:id': 'Load a previously shared report result',
       'GET /me': 'Signed-in user profile + usage (Bearer token; Google/Apple via Entra)',
       'DELETE /me': 'Delete account + cases + stored evidence (POPIA erasure)',
+      'PUT /me/consent': 'Set evidence-storage consent ({ store_evidence: boolean })',
+      'DELETE /reports/:id': 'Admin only — remove a community report (moderation)',
       'GET /cases': 'Signed-in user verification history',
       'GET /cases/:id': 'A single case snapshot',
       'POST /evidence': 'Store a consented evidence file (returns evidenceId)',

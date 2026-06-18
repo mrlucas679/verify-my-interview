@@ -17,6 +17,7 @@ import { ToolResult } from '../../types/tool_results';
 import { azureMonitorConfigured, azureMonitorStatus, initAzureMonitor } from '../observability/telemetry';
 import {
   cosmosEnabled,
+  deleteReport,
   deleteUserData,
   getCase,
   getSharedReport,
@@ -28,7 +29,7 @@ import {
   type CaseDoc,
   type UserDoc,
 } from '../data/cosmos';
-import { getUser } from '../data/cosmos';
+import { getUser, upsertUser } from '../data/cosmos';
 import { authEnabled } from '../auth/identity';
 import { blobEnabled, deleteEvidence, getEvidence, putEvidence } from '../storage/blob';
 import { publishEvent } from '../events/serviceBus';
@@ -317,6 +318,23 @@ export async function submitReportLocal(
   return { ok: true, reportId: report.reportId, indexed };
 }
 
+/**
+ * Admin moderation: remove a community report from the durable corpus and refresh
+ * the entity graph. AUTHORIZATION (admin role) is enforced at the HTTP boundary
+ * (requireAdmin) — this core assumes the caller is already authorized. The derived
+ * Search index is reconciled by the report.created/-changed event consumer.
+ */
+export async function deleteReportLocal(reportId: string): Promise<{ ok: true; deleted: boolean }> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'The durable report store is not configured');
+  const id = cleanString(reportId, 80);
+  if (!id) throw new LocalHttpError(400, 'A reportId is required');
+  const deleted = await deleteReport(id);
+  if (scamNetwork.enabled || cosmosEnabled()) {
+    await entityGraph.refresh().catch(() => {});
+  }
+  return { ok: true, deleted };
+}
+
 export function healthSnapshot(): HealthSnapshot {
   return {
     status: 'ok',
@@ -403,12 +421,30 @@ export async function getCaseLocal(userId: string, caseId: string): Promise<Case
   return found;
 }
 
+/** Set a user's evidence-storage consent (POPIA explicit consent). */
+export async function setConsentLocal(
+  userId: string,
+  storeEvidence: boolean
+): Promise<{ consent: UserDoc['consent'] }> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'Accounts are not configured on this server');
+  const user = await upsertUser({ id: userId }, { store_evidence: storeEvidence });
+  return { consent: user.consent };
+}
+
 /**
  * Store an uploaded evidence file for a consented user. Re-sniffs and caps the
- * buffer (never trust caller MIME), returns the evidenceId. 503 when storage off.
+ * buffer (never trust caller MIME), returns the evidenceId. 503 when storage off,
+ * 403 until the user has explicitly consented to evidence storage (POPIA).
  */
 export async function storeEvidenceLocal(userId: string, buffer: Buffer): Promise<{ evidenceId: string }> {
   if (!blobEnabled()) throw new LocalHttpError(503, 'Evidence storage is not configured on this server');
+  // POPIA: never persist evidence without the user's explicit, recorded consent.
+  if (cosmosEnabled()) {
+    const user = await getUser(userId);
+    if (!user?.consent?.store_evidence) {
+      throw new LocalHttpError(403, 'Enable evidence storage in your privacy settings before uploading files.');
+    }
+  }
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) throw new LocalHttpError(400, 'file is required');
   const kind = sniffUploadType(buffer) ?? (sniffAudioType(buffer) ? 'audio' : null);
   if (!kind) throw new LocalHttpError(415, 'Unsupported evidence file type');
