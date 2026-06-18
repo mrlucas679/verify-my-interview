@@ -10,8 +10,8 @@ const SOURCE_LABELS: Record<string, string> = {
   lookup_phone_intel: 'Phone check',
   detect_scam_patterns: 'Scam-pattern check',
   research_company_web: 'Public web search',
-  scam_network: 'Intelligence network',
-  entity_graph: 'Entity graph',
+  scam_network: 'Similar reports',
+  entity_graph: 'Linked evidence',
   critic: 'Evidence review',
   entities: 'Extracted details',
   network_match: 'Prior report match',
@@ -46,7 +46,7 @@ export function stageEngineLabel(layer: InvestigationLayer): string {
     case 'research':
       return 'Public search';
     case 'network':
-      return 'Intelligence graph';
+      return 'Similar-report check';
     case 'adjudication':
       return 'Evidence review';
   }

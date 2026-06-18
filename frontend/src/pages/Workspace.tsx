@@ -1,38 +1,42 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import {
-  Gavel,
-  Search,
-  ListChecks,
-  Network as NetworkIcon,
-  BookCheck,
-  CheckCircle2,
   AlertTriangle,
-  Loader2,
-  Share2,
+  BookCheck,
+  Building2,
   Check,
-  Volume2,
-  Square,
-  ShieldCheck,
-  ScaleIcon,
+  CheckCircle2,
+  Clipboard,
+  FileText,
+  FileSearch,
+  Gavel,
+  History as HistoryIcon,
+  ListChecks,
+  Loader2,
+  MailWarning,
   Plus,
+  Search,
+  Share2,
+  ShieldCheck,
+  Square,
+  Volume2,
   type LucideIcon,
 } from 'lucide-react';
 import { useCase, type CaseEntry } from '../store/caseStore';
 import { shareReport, submitReport } from '../lib/api';
 import { reportNarration } from '../lib/communication';
-import type { AnalyzeResponse, RiskLevel, RiskReport } from '../lib/types';
+import type { AnalyzeResponse, Entities, RiskLevel, RiskReport } from '../lib/types';
 import { Composer, type ReportInput } from '../components/Composer';
 import { IntelCard } from '../components/IntelCard';
 import { VerdictCard } from '../components/VerdictCard';
 import { InvestigationLayers } from '../components/InvestigationLayers';
 import { Findings } from '../components/Findings';
-import { NetworkMatches } from '../components/NetworkMatches';
+import { SimilarReports } from '../components/SimilarReports';
 import { GuidanceCitations } from '../components/GuidanceCitations';
-import { EvidenceGraph } from '../components/EvidenceGraph';
 import { ChatPanel } from '../components/ChatPanel';
 
 type IntelTint = 'scam' | 'suspicious' | 'needs' | 'low' | 'inconclusive';
+
 const LEVEL_TINT: Record<RiskLevel, IntelTint> = {
   'Likely Scam': 'scam',
   Suspicious: 'suspicious',
@@ -42,30 +46,129 @@ const LEVEL_TINT: Record<RiskLevel, IntelTint> = {
 };
 
 const RUN_STEPS = [
-  'Reading the message and pulling out names, links, and contact details',
-  'Checking company, domain, phone, and payment clues',
-  'Looking for public evidence that confirms or contradicts the offer',
-  'Comparing identifiers with prior scam reports',
-  'Reviewing the proof and writing a clear verdict',
+  'Extracting names, links, contacts, and payment clues',
+  'Checking company and recruiter identifiers',
+  'Reviewing domains, email headers, and document text',
+  'Looking for similar reports',
+  'Composing evidence-backed recommendations',
 ];
 
 const TRUST_MARKERS: { icon: LucideIcon; label: string }[] = [
-  { icon: ScaleIcon, label: 'Score comes from evidence, not guesswork' },
-  { icon: BookCheck, label: 'Advice cites FTC, IC3, and BBB guidance' },
-  { icon: ShieldCheck, label: 'Sensitive identifiers are redacted before analysis' },
+  { icon: ShieldCheck, label: 'Evidence is redacted before analysis' },
+  { icon: BookCheck, label: 'Guidance cites official sources' },
+  { icon: HistoryIcon, label: 'Checks are saved to history' },
 ];
 
 function verdictDigest(report: RiskReport): string {
   const lines = [
-    `${report.risk_level} — risk ${report.risk_score}/100, confidence ${Math.round(report.confidence * 100)}%`,
+    `${report.risk_level} - risk ${report.risk_score}/100, confidence ${Math.round(report.confidence * 100)}%`,
     '',
     report.case_summary,
   ];
-  if (report.red_flags.length) lines.push('', 'Red flags:', ...report.red_flags.map((f) => `- ${f}`));
+  if (report.red_flags.length) lines.push('', 'Red flags:', ...report.red_flags.map((flag) => `- ${flag}`));
   return lines.join('\n');
 }
 
-/** Share + Read-aloud for the latest completed verdict (header actions). */
+function compactEvidence(evidence: string): string {
+  const clean = evidence.replace(/\n{3,}/g, '\n\n').trim();
+  if (clean.length <= 900) return clean;
+  return `${clean.slice(0, 900).trim()}...`;
+}
+
+function evidenceMeta(evidence: string): string {
+  const attachments = evidence.match(/^Attachment:/gm)?.length ?? 0;
+  const chars = evidence.trim().length;
+  if (attachments > 0) return `${attachments} attachment${attachments === 1 ? '' : 's'} - ${chars.toLocaleString()} chars`;
+  return `${chars.toLocaleString()} chars`;
+}
+
+function formatList(values: string[], empty: string): ReactNode {
+  const items = values.filter(Boolean).slice(0, 6);
+  if (items.length === 0) return <p className="text-sm text-muted">{empty}</p>;
+  return (
+    <ul className="space-y-1.5">
+      {items.map((value) => (
+        <li key={value} className="rounded-lg border border-line bg-ink-900 px-3 py-2 font-mono text-xs text-slate-300">
+          {value}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function EntityGroup({ label, values }: { label: string; values: string[] }) {
+  if (values.length === 0) return null;
+  return (
+    <div>
+      <p className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">{label}</p>
+      {formatList(values, 'No identifiers found.')}
+    </div>
+  );
+}
+
+function CompanyIntel({ report }: { report: RiskReport }) {
+  const companies = report.entities.companies.slice(0, 6);
+  const facts = report.verified_facts.slice(0, 5);
+  const positives = report.positive_signals.slice(0, 4);
+  return (
+    <div className="grid gap-3 md:grid-cols-[0.85fr_1.15fr]">
+      <div className="surface-2 p-3">
+        <p className="mb-2 text-xs font-medium text-muted">Claimed companies</p>
+        {formatList(companies, 'No company name was clear in the evidence.')}
+      </div>
+      <div className="space-y-3">
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-muted">Verified facts</p>
+          {facts.length ? (
+            <ul className="space-y-1.5 text-sm text-slate-300">
+              {facts.map((fact) => (
+                <li key={fact} className="flex gap-2">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-risk-low" strokeWidth={1.75} />
+                  <span>{fact}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted">No verified company facts were strong enough to rely on.</p>
+          )}
+        </div>
+        {positives.length > 0 && (
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-muted">Legitimacy signals</p>
+            <ul className="space-y-1.5 text-sm text-slate-300">
+              {positives.map((signal) => (
+                <li key={signal}>{signal}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EvidenceIntel({ entities }: { entities: Entities }) {
+  const groups = [
+    { label: 'Emails', values: entities.emails },
+    { label: 'Domains', values: entities.domains },
+    { label: 'URLs', values: entities.urls },
+    { label: 'Phones', values: entities.phones },
+    { label: 'Money requests', values: entities.money_requests },
+    { label: 'Job titles', values: entities.job_titles },
+  ];
+  const visible = groups.filter((group) => group.values.length > 0).slice(0, 6);
+  if (visible.length === 0) {
+    return <p className="text-sm text-muted">No structured identifiers were extracted from this evidence packet.</p>;
+  }
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {visible.map((group) => (
+        <EntityGroup key={group.label} label={group.label} values={group.values} />
+      ))}
+    </div>
+  );
+}
+
 function VerdictActions({ result, report }: { result: AnalyzeResponse; report: RiskReport }) {
   const [shareState, setShareState] = useState<'idle' | 'sharing' | 'copied' | 'error'>('idle');
   const [speaking, setSpeaking] = useState(false);
@@ -88,7 +191,7 @@ function VerdictActions({ result, report }: { result: AnalyzeResponse; report: R
       try {
         await navigator.clipboard.writeText(`${window.location.origin}/s/${id}`);
       } catch {
-        /* clipboard blocked; link still resolvable */
+        /* Clipboard access can be blocked; the server-side share still exists. */
       }
       setShareState('copied');
     } catch {
@@ -106,16 +209,16 @@ function VerdictActions({ result, report }: { result: AnalyzeResponse; report: R
       return;
     }
     window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(reportNarration(report));
-    u.onend = () => setSpeaking(false);
-    u.onerror = () => setSpeaking(false);
-    window.speechSynthesis.speak(u);
+    const utterance = new SpeechSynthesisUtterance(reportNarration(report));
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    window.speechSynthesis.speak(utterance);
     setSpeaking(true);
   }
 
   const ShareIcon = shareState === 'copied' ? Check : Share2;
   const shareLabel =
-    shareState === 'sharing' ? 'Saving…' : shareState === 'copied' ? 'Copied' : shareState === 'error' ? 'Unavailable' : 'Share';
+    shareState === 'sharing' ? 'Saving' : shareState === 'copied' ? 'Copied' : shareState === 'error' ? 'Unavailable' : 'Share';
 
   return (
     <>
@@ -143,29 +246,48 @@ function VerdictActions({ result, report }: { result: AnalyzeResponse; report: R
   );
 }
 
-function RunningCard() {
-  const [step, setStep] = useState(0);
-  const reduceMotion = useReducedMotion();
-  useEffect(() => {
-    if (reduceMotion) return;
-    const t = setInterval(() => setStep((s) => (s + 1) % RUN_STEPS.length), 1100);
-    return () => clearInterval(t);
-  }, [reduceMotion]);
+function UserEvidencePacket({ evidence }: { evidence: string }) {
   return (
-    <div className="surface flex items-center gap-4 p-5" role="status" aria-live="polite">
-      <Loader2 className="h-6 w-6 shrink-0 animate-spin text-accent" strokeWidth={1.75} />
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-slate-100">Investigating…</p>
-        <p className="truncate font-mono text-xs text-muted">{RUN_STEPS[reduceMotion ? 0 : step]}</p>
+    <div className="flex justify-end">
+      <div className="max-w-[92%] rounded-2xl border border-line bg-ink-800 px-4 py-3 shadow-card sm:max-w-[84%]">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-faint">
+            <FileText className="h-3.5 w-3.5" strokeWidth={1.75} />
+            Evidence packet
+          </span>
+          <span className="font-mono text-[11px] text-faint">{evidenceMeta(evidence)}</span>
+        </div>
+        <p className="max-h-36 overflow-hidden whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
+          {compactEvidence(evidence)}
+        </p>
       </div>
     </div>
   );
 }
 
-/** Render one completed verify result as a group of intelligence cards. */
+function RunningCard() {
+  const [step, setStep] = useState(0);
+  const reduceMotion = useReducedMotion();
+
+  useEffect(() => {
+    if (reduceMotion) return;
+    const timer = setInterval(() => setStep((current) => (current + 1) % RUN_STEPS.length), 1100);
+    return () => clearInterval(timer);
+  }, [reduceMotion]);
+
+  return (
+    <div className="surface flex items-start gap-4 p-5" role="status" aria-live="polite">
+      <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-accent" strokeWidth={1.75} />
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-slate-100">Investigation running</p>
+        <p className="mt-1 font-mono text-xs text-muted">{RUN_STEPS[reduceMotion ? 0 : step]}</p>
+      </div>
+    </div>
+  );
+}
+
 function ResultGroup({ result, isLatest }: { result: AnalyzeResponse; isLatest: boolean }) {
-  const { report, trace, signals, matches, graph } = result;
-  const hasNetwork = (graph && graph.nodes.length > 1) || matches.length > 0;
+  const { report, trace, signals, matches } = result;
   return (
     <div className="space-y-3">
       <IntelCard
@@ -179,25 +301,25 @@ function ResultGroup({ result, isLatest }: { result: AnalyzeResponse; isLatest: 
         <VerdictCard report={report} />
       </IntelCard>
 
-      <IntelCard icon={Search} title="Investigation" tint="accent" defaultExpanded={false}>
-        <InvestigationLayers trace={trace} />
+      <IntelCard icon={Building2} title="Company verification" tint="accent" defaultExpanded={false}>
+        <CompanyIntel report={report} />
+      </IntelCard>
+
+      <IntelCard icon={MailWarning} title="Evidence and identifiers" tint="default" defaultExpanded={false}>
+        <EvidenceIntel entities={report.entities} />
       </IntelCard>
 
       <IntelCard icon={ListChecks} title="Why this score" tint="default">
         <Findings signals={signals} />
       </IntelCard>
 
-      {hasNetwork && (
-        <IntelCard icon={NetworkIcon} title="Intelligence network" tint="default" defaultExpanded={false}>
-          {graph && graph.nodes.length > 1 && (
-            <div className="mb-3">
-              <EvidenceGraph graph={graph} height={360} />
-              <p className="mt-2 text-xs text-faint">
-                These identifiers connect to earlier reports. Select a node to inspect the proof.
-              </p>
-            </div>
-          )}
-          {matches.length > 0 && <NetworkMatches matches={matches} />}
+      <IntelCard icon={Search} title="Investigation trace" tint="accent" defaultExpanded={false}>
+        <InvestigationLayers trace={trace} />
+      </IntelCard>
+
+      {matches.length > 0 && (
+        <IntelCard icon={FileSearch} title="Similar reports" tint="default" defaultExpanded={false}>
+          <SimilarReports matches={matches} />
         </IntelCard>
       )}
 
@@ -208,14 +330,14 @@ function ResultGroup({ result, isLatest }: { result: AnalyzeResponse; isLatest: 
       )}
 
       {report.recommended_next_steps.length > 0 && (
-        <IntelCard icon={ListChecks} title="Recommended next steps" tint="accent">
+        <IntelCard icon={Clipboard} title="Recommended next steps" tint="accent">
           <ol className="space-y-2">
-            {report.recommended_next_steps.map((s, i) => (
-              <li key={i} className="flex gap-2.5 text-sm text-slate-300">
+            {report.recommended_next_steps.slice(0, 8).map((step, index) => (
+              <li key={step} className="flex gap-2.5 text-sm text-slate-300">
                 <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-accent-soft font-mono text-[11px] text-accent">
-                  {i + 1}
+                  {index + 1}
                 </span>
-                {s}
+                {step}
               </li>
             ))}
           </ol>
@@ -223,8 +345,10 @@ function ResultGroup({ result, isLatest }: { result: AnalyzeResponse; isLatest: 
             <div className="surface-2 mt-3 p-3">
               <p className="mb-1.5 text-xs font-medium text-muted">To make the verdict stronger, add</p>
               <ul className="space-y-1">
-                {report.missing_evidence.map((m, i) => (
-                  <li key={i} className="text-xs text-faint">{m}</li>
+                {report.missing_evidence.slice(0, 6).map((missing) => (
+                  <li key={missing} className="text-xs text-faint">
+                    {missing}
+                  </li>
                 ))}
               </ul>
             </div>
@@ -239,6 +363,7 @@ interface ReportAck {
   id: string;
   kind: 'report';
   company: string;
+  evidence: string;
   reportId: string | null;
   status: 'submitting' | 'done' | 'error';
   error: string | null;
@@ -251,34 +376,34 @@ function ReportAckCard({ ack, onAlsoCheck }: { ack: ReportAck; onAlsoCheck: () =
       <div role="alert" className="surface flex items-start gap-3 border-risk-scam/40 p-5 text-sm text-risk-scam">
         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.75} />
         <div>
-          <p className="font-medium">We couldn’t file that report.</p>
+          <p className="font-medium">We could not file that report.</p>
           <p className="mt-1 text-risk-scam/90">{ack.error}</p>
         </div>
       </div>
     );
   }
+
   return (
     <IntelCard
       icon={ack.status === 'submitting' ? Loader2 : CheckCircle2}
-      title={ack.status === 'submitting' ? 'Filing report…' : 'Report received — thank you'}
+      title={ack.status === 'submitting' ? 'Filing report' : 'Report received'}
       tint="low"
       meta={ack.reportId ?? undefined}
     >
       {ack.status === 'submitting' ? (
-        <p className="text-sm text-muted">Submitting your report to the scam-intelligence network…</p>
+        <p className="text-sm text-muted">Saving your report.</p>
       ) : (
         <div className="space-y-3 text-sm text-slate-300">
           <p>
             Your report{ack.reportId ? <span className="font-mono text-xs text-faint"> ({ack.reportId})</span> : ''} has
-            been received. We’ll verify the details and the next person who checks this recruiter’s email, domain, or
-            number will see the match. You won’t get an individual investigation result back.
+            been received. It can help future checks spot the same company, domain, email, phone, or payment clue.
           </p>
-          <div>
-            <p className="mb-1.5 text-xs font-medium text-muted">While you’re here — stay safe:</p>
+          <div className="surface-2 p-3">
+            <p className="mb-1.5 text-xs font-medium text-muted">Safety next steps</p>
             <ul className="space-y-1 text-xs text-faint">
-              <li>Don’t send money, gift cards, crypto, ID documents, or banking details.</li>
-              <li>If you already paid, contact your bank or card provider now — speed matters.</li>
-              <li>Keep the messages, receipts, numbers, and links as evidence before blocking.</li>
+              <li>Do not send money, gift cards, crypto, ID documents, or banking details.</li>
+              <li>If you already paid, contact your bank or card provider now.</li>
+              <li>Keep messages, receipts, numbers, links, and file names before blocking.</li>
             </ul>
           </div>
           <button type="button" onClick={onAlsoCheck} className="btn-ghost text-sm">
@@ -295,7 +420,7 @@ type TimelineItem =
   | { type: 'report'; ack: ReportAck; createdAt: number };
 
 export function Workspace() {
-  const { entries, result, runAnalysis, newCase } = useCase();
+  const { entries, result, runAnalysis, recordReport, newCase } = useCase();
   const [acks, setAcks] = useState<ReportAck[]>([]);
   const reportAborts = useRef<Map<string, AbortController>>(new Map());
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -304,7 +429,7 @@ export function Workspace() {
   useEffect(() => {
     const live = reportAborts.current;
     return () => {
-      for (const c of live.values()) c.abort();
+      for (const controller of live.values()) controller.abort();
       live.clear();
     };
   }, []);
@@ -322,7 +447,16 @@ export function Workspace() {
     reportAborts.current.set(id, controller);
     setAcks((prev) => [
       ...prev,
-      { id, kind: 'report', company: input.company, reportId: null, status: 'submitting', error: null, createdAt: Date.now() },
+      {
+        id,
+        kind: 'report',
+        company: input.company,
+        evidence: input.evidence,
+        reportId: null,
+        status: 'submitting',
+        error: null,
+        createdAt: Date.now(),
+      },
     ]);
     try {
       const { reportId } = await submitReport(
@@ -336,135 +470,137 @@ export function Workspace() {
         },
         { signal: controller.signal }
       );
-      setAcks((prev) => prev.map((a) => (a.id === id ? { ...a, status: 'done', reportId } : a)));
-    } catch (e) {
+      setAcks((prev) => prev.map((ack) => (ack.id === id ? { ...ack, status: 'done', reportId } : ack)));
+      recordReport({ company: input.company, evidence: input.evidence, reportId });
+    } catch (error) {
       if (controller.signal.aborted) return;
-      const message = e instanceof Error ? e.message : 'Could not file the report.';
-      setAcks((prev) => prev.map((a) => (a.id === id ? { ...a, status: 'error', error: message } : a)));
+      const message = error instanceof Error ? error.message : 'Could not file the report.';
+      setAcks((prev) => prev.map((ack) => (ack.id === id ? { ...ack, status: 'error', error: message } : ack)));
     } finally {
       reportAborts.current.delete(id);
     }
-  }, []);
+  }, [recordReport]);
 
-  const reporting = useMemo(() => acks.some((a) => a.status === 'submitting'), [acks]);
-
+  const reporting = useMemo(() => acks.some((ack) => ack.status === 'submitting'), [acks]);
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [
       ...entries.map((entry): TimelineItem => ({ type: 'verify', entry, createdAt: entry.createdAt })),
       ...acks.map((ack): TimelineItem => ({ type: 'report', ack, createdAt: ack.createdAt })),
     ];
     return items.sort((a, b) => a.createdAt - b.createdAt);
-  }, [entries, acks]);
-
+  }, [acks, entries]);
   const active = timeline.length > 0;
   const latestDoneId = useMemo(() => {
-    const done = entries.filter((e) => e.status === 'done');
+    const done = entries.filter((entry) => entry.status === 'done');
     return done.length ? done[done.length - 1].id : null;
   }, [entries]);
 
-  // Keep the newest card group in view as the stack grows.
   useEffect(() => {
     if (active && !reduceMotion) bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [timeline.length, active, reduceMotion]);
+  }, [active, reduceMotion, timeline.length]);
 
   function startNew() {
-    for (const c of reportAborts.current.values()) c.abort();
+    for (const controller of reportAborts.current.values()) controller.abort();
     reportAborts.current.clear();
     setAcks([]);
     newCase();
   }
 
+  if (!active) {
+    return (
+      <div className="min-h-[calc(100vh-4rem)] bg-ink-900">
+        <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-3xl flex-col justify-center px-4 py-8 sm:px-6">
+          <header className="mb-6 text-center">
+            <p className="eyebrow">Investigation workspace</p>
+            <h1 className="mt-3 font-display text-3xl font-semibold leading-tight text-white sm:text-4xl">
+              What do you want to check?
+            </h1>
+            <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-muted sm:text-base">
+              Paste the whole situation, attach files, add a voice note, or report what happened. One evidence packet is
+              enough.
+            </p>
+          </header>
+          <Composer onVerify={handleVerify} onReport={handleReport} reporting={reporting} />
+          <ul className="mt-5 flex flex-col items-center gap-x-6 gap-y-2.5 sm:flex-row sm:flex-wrap sm:justify-center">
+            {TRUST_MARKERS.map((marker) => {
+              const Icon = marker.icon;
+              return (
+                <li key={marker.label} className="flex items-center gap-2 text-xs text-faint">
+                  <Icon className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} /> {marker.label}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="bg-grid min-h-[calc(100vh-4rem)]">
-      <div className="mx-auto flex max-w-3xl flex-col px-6 pb-10 pt-10">
-        {!active ? (
-          /* ── Empty / first-run ─────────────────────────────────────────── */
-          <div className="pt-6">
-            <header className="text-center">
-              <span className="eyebrow">Job-offer safety check</span>
-              <h1 className="mt-3 font-display text-3xl font-semibold leading-[1.12] tracking-tight text-white sm:text-[2.4rem]">
-                Check a job, recruiter, or offer before you trust it.
-              </h1>
-              <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-muted sm:text-base">
-                Paste a message, drop a screenshot or PDF, or record what happened. We check the recruiter, domain,
-                payment request, and prior scam patterns — then explain what’s safe, risky, or still uncertain.
-              </p>
-            </header>
-            <div className="mx-auto mt-8 w-full max-w-2xl">
-              <Composer onVerify={handleVerify} onReport={handleReport} reporting={reporting} />
+    <div className="min-h-[calc(100vh-4rem)] bg-ink-900">
+      <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-3xl flex-col px-4 sm:px-6">
+        <div className="flex-1 py-6 sm:py-8">
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <div>
+              <p className="eyebrow">Workspace</p>
+              <h1 className="mt-1 font-display text-xl font-semibold text-white">Current investigation</h1>
             </div>
-            <ul className="mt-6 flex flex-col items-center gap-x-6 gap-y-2.5 sm:flex-row sm:flex-wrap sm:justify-center">
-              {TRUST_MARKERS.map((t) => {
-                const Icon = t.icon;
-                return (
-                  <li key={t.label} className="flex items-center gap-2 text-xs text-faint">
-                    <Icon className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} /> {t.label}
-                  </li>
-                );
-              })}
-            </ul>
+            <button type="button" onClick={startNew} className="btn-ghost text-sm">
+              <Plus className="h-4 w-4" strokeWidth={1.75} /> New case
+            </button>
           </div>
-        ) : (
-          /* ── Active workspace ──────────────────────────────────────────── */
-          <>
-            <div className="mb-4 flex items-center justify-between">
-              <span className="eyebrow">Investigation workspace</span>
-              <button type="button" onClick={startNew} className="btn-ghost text-sm">
-                <Plus className="h-4 w-4" strokeWidth={1.75} /> New case
-              </button>
-            </div>
 
-            <div className="space-y-6">
-              {timeline.map((item) => (
-                <motion.div
-                  key={item.type === 'verify' ? item.entry.id : item.ack.id}
-                  {...(reduceMotion
-                    ? {}
-                    : {
-                        initial: { opacity: 0, y: 8 },
-                        animate: { opacity: 1, y: 0 },
-                        transition: { duration: 0.22, ease: 'easeOut' as const },
-                      })}
-                >
-                  {item.type === 'report' ? (
-                    <ReportAckCard
-                      ack={item.ack}
-                      onAlsoCheck={() => {
-                        // Re-run the reported text through Verify isn't stored here;
-                        // prompt the user to paste — keep it explicit and simple.
-                        document.getElementById('workspace-composer')?.scrollIntoView({ behavior: 'smooth' });
-                      }}
-                    />
-                  ) : item.entry.status === 'running' ? (
-                    <RunningCard />
-                  ) : item.entry.status === 'error' ? (
-                    <div role="alert" className="surface flex items-start gap-3 border-risk-scam/40 p-5 text-sm text-risk-scam">
-                      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.75} />
-                      <div>
-                        <p className="font-medium">We couldn’t complete this check.</p>
-                        <p className="mt-1 text-risk-scam/90">{item.entry.error}</p>
+          <div className="space-y-5">
+            {timeline.map((item) => (
+              <motion.div
+                key={item.type === 'verify' ? item.entry.id : item.ack.id}
+                {...(reduceMotion
+                  ? {}
+                  : {
+                      initial: { opacity: 0, y: 8 },
+                      animate: { opacity: 1, y: 0 },
+                      transition: { duration: 0.22, ease: 'easeOut' as const },
+                    })}
+                className="space-y-3"
+              >
+                {item.type === 'report' ? (
+                  <>
+                    <UserEvidencePacket evidence={item.ack.evidence} />
+                    <ReportAckCard ack={item.ack} onAlsoCheck={() => handleVerify(item.ack.evidence)} />
+                  </>
+                ) : (
+                  <>
+                    <UserEvidencePacket evidence={item.entry.evidence} />
+                    {item.entry.status === 'running' ? (
+                      <RunningCard />
+                    ) : item.entry.status === 'error' ? (
+                      <div role="alert" className="surface flex items-start gap-3 border-risk-scam/40 p-5 text-sm text-risk-scam">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.75} />
+                        <div>
+                          <p className="font-medium">We could not complete this check.</p>
+                          <p className="mt-1 text-risk-scam/90">{item.entry.error}</p>
+                        </div>
                       </div>
-                    </div>
-                  ) : item.entry.result ? (
-                    <ResultGroup result={item.entry.result} isLatest={item.entry.id === latestDoneId} />
-                  ) : null}
-                </motion.div>
-              ))}
-            </div>
+                    ) : item.entry.result ? (
+                      <ResultGroup result={item.entry.result} isLatest={item.entry.id === latestDoneId} />
+                    ) : null}
+                  </>
+                )}
+              </motion.div>
+            ))}
+          </div>
 
-            {/* Ask the detective about the latest completed case */}
-            {result && (
-              <div className="mt-6">
-                <ChatPanel />
-              </div>
-            )}
-
-            {/* Docked composer */}
-            <div id="workspace-composer" ref={bottomRef} className="mt-6">
-              <Composer onVerify={handleVerify} onReport={handleReport} reporting={reporting} docked />
+          {result && (
+            <div className="mt-6">
+              <ChatPanel />
             </div>
-          </>
-        )}
+          )}
+          <div ref={bottomRef} />
+        </div>
+
+        <div className="sticky bottom-0 z-20 -mx-4 border-t border-line/70 bg-ink-900/95 px-4 py-4 backdrop-blur sm:-mx-6 sm:px-6">
+          <Composer onVerify={handleVerify} onReport={handleReport} reporting={reporting} docked />
+        </div>
       </div>
     </div>
   );

@@ -101,7 +101,7 @@ export interface NetworkMatch {
   trustLevel?: TrustLevel;
 }
 
-// --- Entity graph ------------------------------------------------------------
+// --- Linked evidence payload ------------------------------------------------
 
 export type NodeType =
   | 'report'

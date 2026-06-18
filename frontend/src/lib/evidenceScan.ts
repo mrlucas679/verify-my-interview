@@ -1,6 +1,6 @@
 // Client-side evidence preview scanning. The REAL parsing/redaction happens
 // server-side; these bounded regexes exist only so the composer can visibly
-// "understand" pasted text (chip by chip) and pre-fill a community report. All
+// "understand" pasted text (chip by chip) and pre-fill a scam report. All
 // loops are length-capped (never scan more than the server accepts).
 
 const SCAN_CAP = 20_000;
@@ -51,7 +51,7 @@ export function detectEntities(raw: string): DetectedEntity[] {
   return chips.slice(0, 10);
 }
 
-/** Pre-fill scam IOCs for a community report payload (server re-validates + redacts). */
+/** Pre-fill scam IOCs for a report payload (server re-validates + redacts). */
 export function extractReportIOCs(raw: string): { emails: string[]; domains: string[]; phones: string[] } {
   const text = raw.slice(0, SCAN_CAP);
   const lower = (xs: string[]) => Array.from(new Set(xs.map((x) => x.toLowerCase())));
@@ -77,6 +77,52 @@ export function extractReportIOCs(raw: string): { emails: string[]; domains: str
     )
   );
   return { emails: emails.slice(0, 20), domains: domains.slice(0, 20), phones: phones.slice(0, 20) };
+}
+
+function cleanCompanyCandidate(value: string): string {
+  return value
+    .replace(/\s+/g, ' ')
+    .replace(/[.,;:)\]]+$/g, '')
+    .trim()
+    .slice(0, 120);
+}
+
+function companyFromDomain(domain: string): string {
+  const host = domain.toLowerCase().replace(/^www\./, '');
+  const token = host.split('.')[0] ?? '';
+  const words = token
+    .split(/[-_]+/)
+    .filter((part) => part.length > 1)
+    .slice(0, 4);
+  if (words.length === 0) return '';
+  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+export function inferCompanyName(raw: string): string {
+  const text = raw.slice(0, SCAN_CAP).replace(/\s+/g, ' ').trim();
+  if (!text) return 'Unknown company';
+
+  const patterns = [
+    /\b(?:company|brand|employer|recruiter)(?:\s+name)?\s+(?:is|was|called|claims to be|claimed to be)\s+([A-Z0-9][A-Za-z0-9&.' -]{1,90})/i,
+    /\b(?:impersonating|pretending to be|posing as|from)\s+([A-Z0-9][A-Za-z0-9&.' -]{1,90})/i,
+    /\b(?:job|role|interview|offer)\s+(?:at|with|from)\s+([A-Z0-9][A-Za-z0-9&.' -]{1,90})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const candidate = cleanCompanyCandidate(pattern.exec(text)?.[1] ?? '');
+    if (candidate.length >= 2 && !/\b(the|this|that|someone|recruiter|company)\b/i.test(candidate)) {
+      return candidate;
+    }
+  }
+
+  const iocs = extractReportIOCs(text);
+  const domain = iocs.domains[0];
+  if (domain) {
+    const fromDomain = companyFromDomain(domain);
+    if (fromDomain) return fromDomain;
+  }
+
+  return 'Unknown company';
 }
 
 /** Heuristic: does the text read like the scam ALREADY happened to the writer?

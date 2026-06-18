@@ -215,12 +215,8 @@ export interface ScamReportInput {
   location?: string;
 }
 
-/**
- * File a community scam report (POST /report). The report is added to the
- * scam-intelligence network so the next person who checks this recruiter's
- * infrastructure sees the match. Server redacts sensitive identifiers and
- * keeps only scam IOCs.
- */
+/** File a scam report (POST /report). Server redacts sensitive identifiers and
+ * keeps only scam IOCs that can help future checks. */
 export async function submitReport(
   input: ScamReportInput,
   options: RequestOptions = {}

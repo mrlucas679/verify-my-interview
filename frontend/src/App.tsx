@@ -5,17 +5,16 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { useCase } from './store/caseStore';
 
 const Workspace = lazy(() => import('./pages/Workspace').then((mod) => ({ default: mod.Workspace })));
-const Report = lazy(() => import('./pages/Report').then((mod) => ({ default: mod.Report })));
+const History = lazy(() => import('./pages/History').then((mod) => ({ default: mod.History })));
 
-// /s/:id — load a previously shared report into the case store, then render the
-// same dossier. Report handles its own loading/error/empty states.
+// /s/:id loads a shared dossier into the same investigation workspace.
 function SharedReportRoute() {
   const { id } = useParams();
   const { loadShared } = useCase();
   useEffect(() => {
     if (id) void loadShared(id);
   }, [id, loadShared]);
-  return <Report />;
+  return <Workspace />;
 }
 
 function RouteFallback() {
@@ -35,8 +34,8 @@ export default function App() {
         <Routes>
           <Route element={<Layout />}>
             <Route path="/" element={<Workspace />} />
-            {/* The standalone dossier folded into the workspace; keep the path as
-                a redirect so old links/bookmarks land on the workspace. */}
+            <Route path="/history" element={<History />} />
+            <Route path="/network" element={<Navigate to="/history" replace />} />
             <Route path="/report" element={<Navigate to="/" replace />} />
             <Route path="/s/:id" element={<SharedReportRoute />} />
             <Route path="*" element={<Navigate to="/" replace />} />

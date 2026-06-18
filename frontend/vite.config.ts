@@ -15,7 +15,6 @@ export default defineConfig({
       '/transcribe': BACKEND,
       '/chat': BACKEND,
       '/report': BACKEND,
-      '/network': BACKEND,
       '/health': BACKEND,
       '/docs': BACKEND,
     },
