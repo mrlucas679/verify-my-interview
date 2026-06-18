@@ -16,6 +16,29 @@ interface RequestOptions {
   signal?: AbortSignal;
 }
 
+// ── Auth token injection (pluggable) ─────────────────────────────────────────
+// The auth layer (Phase 4, MSAL/Entra) registers a provider here; until then no
+// provider is set and requests go out unauthenticated exactly as today. Keeping
+// this indirection means the API client has zero hard dependency on MSAL, so the
+// anonymous flow and offline build are unaffected.
+type TokenProvider = () => Promise<string | null> | string | null;
+let authTokenProvider: TokenProvider | null = null;
+
+export function setAuthTokenProvider(provider: TokenProvider | null): void {
+  authTokenProvider = provider;
+}
+
+async function authHeader(): Promise<Record<string, string>> {
+  if (!authTokenProvider) return {};
+  try {
+    const token = await authTokenProvider();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    // Token acquisition failed → fall back to anonymous; the server decides.
+    return {};
+  }
+}
+
 const ROUTE_TIMEOUT_MS = {
   chat: 30_000,
   upload: 75_000,
@@ -75,7 +98,8 @@ async function fetchJson<T>(
   signal?.addEventListener('abort', abort, { once: true });
 
   try {
-    const res = await fetch(path, { ...init, signal: controller.signal });
+    const headers = { ...(init.headers as Record<string, string> | undefined), ...(await authHeader()) };
+    const res = await fetch(path, { ...init, headers, signal: controller.signal });
     if (!res.ok) throw await errorFromResponse(res, `${path} failed (${res.status})`);
     return (await res.json()) as T;
   } catch (error) {

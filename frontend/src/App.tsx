@@ -4,7 +4,7 @@ import { Layout } from './components/Layout';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useCase } from './store/caseStore';
 
-const Verify = lazy(() => import('./pages/Verify').then((mod) => ({ default: mod.Verify })));
+const Workspace = lazy(() => import('./pages/Workspace').then((mod) => ({ default: mod.Workspace })));
 const Report = lazy(() => import('./pages/Report').then((mod) => ({ default: mod.Report })));
 
 // /s/:id — load a previously shared report into the case store, then render the
@@ -34,8 +34,10 @@ export default function App() {
       <Suspense fallback={<RouteFallback />}>
         <Routes>
           <Route element={<Layout />}>
-            <Route path="/" element={<Verify />} />
-            <Route path="/report" element={<Report />} />
+            <Route path="/" element={<Workspace />} />
+            {/* The standalone dossier folded into the workspace; keep the path as
+                a redirect so old links/bookmarks land on the workspace. */}
+            <Route path="/report" element={<Navigate to="/" replace />} />
             <Route path="/s/:id" element={<SharedReportRoute />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
