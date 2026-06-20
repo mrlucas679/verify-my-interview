@@ -10,6 +10,9 @@ yarn.lock
 dist/
 build/
 /public/
+/dist-functions/
+/dist-functions.zip
+/output/
 *.tsbuildinfo
 
 # Environment

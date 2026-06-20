@@ -10,6 +10,7 @@ import {
   adminViaEmailAllowlist,
   authEnabled,
   isAdmin,
+  jwksUriForIssuer,
   type Identity,
 } from '../../src/backend/auth/identity';
 import { isOwnedEvidenceId } from '../../src/backend/storage/blob';
@@ -33,6 +34,20 @@ describe('authEnabled', () => {
     expect(authEnabled()).toBe(false); // audience still missing
     process.env.AUTH_AUDIENCE = 'api-client-id';
     expect(authEnabled()).toBe(true);
+  });
+});
+
+describe('jwksUriForIssuer', () => {
+  it('derives the Microsoft identity keys URL beside the v2 issuer path', () => {
+    expect(jwksUriForIssuer('https://login.microsoftonline.com/tenant-id/v2.0')).toBe(
+      'https://login.microsoftonline.com/tenant-id/discovery/v2.0/keys'
+    );
+  });
+
+  it('also accepts an issuer without the v2 suffix', () => {
+    expect(jwksUriForIssuer('https://tenant.ciamlogin.com/tenant-id')).toBe(
+      'https://tenant.ciamlogin.com/tenant-id/discovery/v2.0/keys'
+    );
   });
 });
 

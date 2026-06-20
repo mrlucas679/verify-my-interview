@@ -51,6 +51,14 @@ export function securityConfigViolations(): string[] {
     );
   }
 
+  // Community report writes affect the scam-intelligence corpus. In production
+  // the endpoint needs either an API key or an explicit public-report policy.
+  if (!process.env.VMI_REPORT_API_KEY && process.env.VMI_ALLOW_PUBLIC_REPORTS !== '1') {
+    v.push(
+      'VMI_REPORT_API_KEY must be set in production, or VMI_ALLOW_PUBLIC_REPORTS=1 must be set deliberately, so POST /report cannot silently accept unauthenticated corpus writes.'
+    );
+  }
+
   // Authentication. The free tier (accounts, usage metering, the trial gate) only
   // exists when auth is configured; without it the API is fully open + unlimited.
   if (!authEnabled()) {

@@ -6,25 +6,17 @@ import {
   type ClipboardEvent,
   type DragEvent,
 } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
   AlertTriangle,
   ArrowUp,
-  AtSign,
-  Banknote,
-  CheckCircle2,
   FileAudio,
   FileText,
-  Flag,
   Image,
-  Link2,
   Loader2,
   Mail,
   Mic,
   Paperclip,
-  Phone,
-  ShieldQuestion,
-  Trash2,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -34,15 +26,14 @@ import {
   extractReportIOCs,
   inferCompanyName,
   looksLikeVictimReport,
-  type DetectedEntity,
 } from '../lib/evidenceScan';
 import { VoiceRecorder } from './VoiceRecorder';
 
-type Intent = 'verify' | 'report';
 type AttachmentKind = 'audio' | 'document' | 'email' | 'image' | 'text';
 type AttachmentStatus = 'reading' | 'done' | 'error';
 
 const MAX_ATTACHMENTS = 8;
+const MAX_AUDIO_ATTACHMENTS = 6;
 const MAX_TEXT_UPLOAD_BYTES = 256 * 1024;
 const MAX_EVIDENCE_CHARS = 40_000;
 
@@ -55,10 +46,20 @@ export interface ReportInput {
   phones: string[];
 }
 
+export interface ComposerEvidenceFile {
+  file: File;
+  name: string;
+  kind: AttachmentKind;
+}
+
 interface ComposerProps {
-  onVerify: (evidence: string) => void;
+  onVerify: (evidence: string, files: ComposerEvidenceFile[]) => void;
   onReport: (input: ReportInput) => void;
+  onAsk?: (question: string) => void;
+  analyzing?: boolean;
   reporting?: boolean;
+  asking?: boolean;
+  contextActive?: boolean;
   docked?: boolean;
 }
 
@@ -70,14 +71,8 @@ interface EvidenceAttachment {
   detail: string;
   text: string;
   error: string | null;
+  file?: File;
 }
-
-const CHIP_ICON: Record<DetectedEntity['kind'], LucideIcon> = {
-  email: AtSign,
-  link: Link2,
-  phone: Phone,
-  amount: Banknote,
-};
 
 const ATTACHMENT_ICON: Record<AttachmentKind, LucideIcon> = {
   audio: FileAudio,
@@ -136,33 +131,23 @@ function buildEvidence(text: string, attachments: EvidenceAttachment[]): string 
   return sections.join('\n\n---\n\n').slice(0, MAX_EVIDENCE_CHARS);
 }
 
-function EvidenceChips({ entities }: { entities: DetectedEntity[] }) {
-  const reduceMotion = useReducedMotion();
-  if (entities.length === 0) return null;
-  return (
-    <div className="flex flex-wrap gap-1.5" aria-live="polite">
-      {entities.map((entity, index) => {
-        const Icon = CHIP_ICON[entity.kind];
-        return (
-          <motion.span
-            key={`${entity.kind}-${entity.value}`}
-            {...(reduceMotion
-              ? {}
-              : {
-                  initial: { opacity: 0, scale: 0.96 },
-                  animate: { opacity: 1, scale: 1 },
-                  transition: { duration: 0.16, ease: 'easeOut' as const, delay: index * 0.03 },
-                })}
-            className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-300"
-          >
-            <Icon className="h-3 w-3 shrink-0 text-accent" strokeWidth={1.75} />
-            <span className="truncate" style={{ maxWidth: '14rem' }}>
-              {entity.value}
-            </span>
-          </motion.span>
-        );
-      })}
-    </div>
+function storableFiles(attachments: EvidenceAttachment[]): ComposerEvidenceFile[] {
+  const files: ComposerEvidenceFile[] = [];
+  for (const attachment of attachments) {
+    if (files.length >= MAX_ATTACHMENTS) break;
+    if (attachment.status !== 'done' || !attachment.file || attachment.kind === 'text' || attachment.kind === 'email') {
+      continue;
+    }
+    files.push({ file: attachment.file, name: attachment.name, kind: attachment.kind });
+  }
+  return files;
+}
+
+function looksLikeFollowUpQuestion(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 3 || trimmed.length > 500) return false;
+  return /[?]$|^(why|how|what|when|where|who|should|can|could|do i|does this|is this|explain|summarize|draft)\b/i.test(
+    trimmed
   );
 }
 
@@ -206,12 +191,21 @@ function AttachmentPill({
   );
 }
 
-export function Composer({ onVerify, onReport, reporting = false, docked = false }: ComposerProps) {
-  const [intent, setIntent] = useState<Intent>('verify');
+export function Composer({
+  onVerify,
+  onReport,
+  onAsk,
+  analyzing = false,
+  reporting = false,
+  asking = false,
+  contextActive = false,
+  docked = false,
+}: ComposerProps) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<EvidenceAttachment[]>([]);
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [confirmingReport, setConfirmingReport] = useState(false);
   const [recorderOpen, setRecorderOpen] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const aborters = useRef<Map<string, AbortController>>(new Map());
@@ -226,12 +220,22 @@ export function Composer({ onVerify, onReport, reporting = false, docked = false
   const evidence = useMemo(() => buildEvidence(text, attachments), [text, attachments]);
   const detected = useMemo(() => detectEntities(evidence), [evidence]);
   const processing = useMemo(() => attachments.some((a) => a.status === 'reading'), [attachments]);
-  const suggestReport = useMemo(
-    () => intent === 'verify' && looksLikeVictimReport(evidence),
-    [evidence, intent]
+  const inferredReport = useMemo(() => looksLikeVictimReport(evidence), [evidence]);
+  useEffect(() => {
+    setConfirmingReport(false);
+  }, [evidence]);
+  const inferredFollowUp = useMemo(
+    () =>
+      !!onAsk &&
+      contextActive &&
+      !inferredReport &&
+      attachments.length === 0 &&
+      detected.length === 0 &&
+      looksLikeFollowUpQuestion(text),
+    [attachments.length, contextActive, detected.length, inferredReport, onAsk, text]
   );
   const hasEvidence = evidence.trim().length > 0;
-  const canSubmit = hasEvidence && !processing && !reporting;
+  const canSubmit = hasEvidence && !processing && !reporting && !asking && !analyzing;
   const evidenceAtLimit = hasEvidence && evidence.length >= MAX_EVIDENCE_CHARS;
 
   function patchAttachment(id: string, patch: Partial<EvidenceAttachment>) {
@@ -307,6 +311,7 @@ export function Composer({ onVerify, onReport, reporting = false, docked = false
         detail: compactBytes(file.size),
         text: '',
         error: null,
+        file,
       },
     ]);
 
@@ -337,11 +342,23 @@ export function Composer({ onVerify, onReport, reporting = false, docked = false
     }
 
     const selected: File[] = [];
+    let audioSlots = MAX_AUDIO_ATTACHMENTS - attachments.filter((attachment) => attachment.kind === 'audio').length;
+    let skippedAudio = 0;
     for (let index = 0; index < files.length && selected.length < remaining; index += 1) {
       const file = files[index];
-      if (file) selected.push(file);
+      if (!file) continue;
+      if (fileKind(file) === 'audio') {
+        if (audioSlots <= 0) {
+          skippedAudio += 1;
+          continue;
+        }
+        audioSlots -= 1;
+      }
+      selected.push(file);
     }
-    if (files.length > selected.length) {
+    if (skippedAudio > 0) {
+      setNotice(`Added ${selected.length} files. Voice evidence is limited to ${MAX_AUDIO_ATTACHMENTS} clips per packet.`);
+    } else if (files.length > selected.length) {
       setNotice(`Added ${selected.length} files. The packet limit is ${MAX_ATTACHMENTS} attachments.`);
     } else {
       setNotice(null);
@@ -370,7 +387,7 @@ export function Composer({ onVerify, onReport, reporting = false, docked = false
     if (files.length > 0) void processFiles(files);
   }
 
-  function addRecordingTranscript(value: string, meta: { durationSec: number; locale: string }) {
+  function addRecordingTranscript(value: string, meta: { durationSec: number; locale: string }, file?: File) {
     const id = newId('voice');
     setAttachments((prev) =>
       [
@@ -383,6 +400,7 @@ export function Composer({ onVerify, onReport, reporting = false, docked = false
           detail: `Recorded ${meta.durationSec}s (${meta.locale})`,
           text: value,
           error: null,
+          file,
         },
       ].slice(0, MAX_ATTACHMENTS)
     );
@@ -391,7 +409,17 @@ export function Composer({ onVerify, onReport, reporting = false, docked = false
 
   function submit() {
     if (!canSubmit) return;
-    if (intent === 'report') {
+    if (inferredFollowUp && onAsk) {
+      onAsk(text.trim());
+      clearAll();
+      return;
+    }
+    if (inferredReport) {
+      if (!confirmingReport) {
+        setConfirmingReport(true);
+        setNotice('This sounds like a scam report. Press send again to file it, or choose check instead.');
+        return;
+      }
       const iocs = extractReportIOCs(evidence);
       onReport({
         company: inferCompanyName(evidence),
@@ -400,81 +428,93 @@ export function Composer({ onVerify, onReport, reporting = false, docked = false
         ...iocs,
       });
     } else {
-      onVerify(evidence);
+      onVerify(evidence, storableFiles(attachments));
     }
     clearAll();
   }
 
   function submitLabel(): string {
     if (processing) return 'Reading evidence';
-    if (intent === 'report') return reporting ? 'Filing report' : 'File report';
-    return 'Check evidence';
+    if (analyzing) return 'Checking';
+    if (asking) return 'Thinking';
+    if (reporting) return 'Sending';
+    if (inferredFollowUp) return 'Ask';
+    return inferredReport ? 'Send report' : 'Send';
   }
 
   return (
     <section
-      aria-label={intent === 'verify' ? 'Submit evidence to check' : 'Submit evidence as a scam report'}
+      aria-label="Submit evidence"
       onDragOver={(event) => {
         event.preventDefault();
         setDragging(true);
       }}
       onDragLeave={() => setDragging(false)}
       onDrop={handleDrop}
-      className={`surface relative overflow-hidden p-3 transition sm:p-4 ${
+      className={`relative overflow-hidden rounded-2xl border border-line bg-ink-850 p-2 transition shadow-card ${
         dragging ? 'border-accent/70 ring-2 ring-accent/30' : ''
       }`}
     >
       {dragging && (
         <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-ink-900/90">
-          <div className="rounded-xl border border-accent/50 bg-ink-850 px-4 py-3 text-sm text-slate-100">
-            Drop evidence into this packet
-          </div>
+          <div className="rounded-xl border border-accent/50 bg-ink-850 px-4 py-3 text-sm text-slate-100">Drop files</div>
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-2 pb-3">
-        <div className="flex items-center gap-1 rounded-lg border border-line bg-ink-900 p-1">
-          {([
-            { id: 'verify' as const, label: 'Check', icon: ShieldQuestion },
-            { id: 'report' as const, label: 'Report', icon: Flag },
-          ]).map((option) => {
-            const Icon = option.icon;
-            const active = intent === option.id;
-            return (
-              <button
-                key={option.id}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setIntent(option.id)}
-                className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-                  active ? 'bg-ink-700 text-slate-100' : 'text-muted hover:text-slate-200'
-                }`}
-              >
-                <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
-                {option.label}
-              </button>
-            );
-          })}
-        </div>
-        <p className="font-mono text-[11px] text-faint">
-          {evidence.length.toLocaleString()}/{MAX_EVIDENCE_CHARS.toLocaleString()} chars
-        </p>
+      <div className="flex items-end gap-1.5">
+        <button
+          type="button"
+          onClick={() => fileInput.current?.click()}
+          title="Attach files"
+          aria-label="Attach files"
+          className="mb-1 rounded-full p-2 text-muted transition hover:bg-ink-800 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          <Paperclip className="h-4 w-4" strokeWidth={1.75} />
+        </button>
+        <button
+          type="button"
+          onClick={() => setRecorderOpen((open) => !open)}
+          title={recorderOpen ? 'Close recorder' : 'Record voice'}
+          aria-label={recorderOpen ? 'Close recorder' : 'Record voice'}
+          className={`mb-1 rounded-full p-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+            recorderOpen ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-ink-800 hover:text-slate-100'
+          }`}
+        >
+          <Mic className="h-4 w-4" strokeWidth={1.75} />
+        </button>
+        <textarea
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onPaste={handlePaste}
+          onKeyDown={(event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') submit();
+          }}
+          rows={docked ? 1 : 2}
+          aria-label="Paste a job post, message, link, file, or question"
+          placeholder={
+            contextActive
+              ? 'Ask a follow-up or paste another job post'
+              : 'Paste a job post, message, link, PDF, image, or voice note'
+          }
+          className="max-h-[32vh] min-h-[44px] flex-1 resize-none bg-transparent px-1 py-2.5 text-sm leading-relaxed text-slate-100 placeholder:text-faint focus:outline-none"
+        />
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!canSubmit}
+          title={submitLabel()}
+          aria-label={submitLabel()}
+          className="mb-1 grid h-9 w-9 shrink-0 place-items-center rounded-full bg-accent text-white shadow-glow transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:bg-ink-700 disabled:text-faint disabled:shadow-none"
+        >
+          {processing || reporting || asking || analyzing ? (
+            <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
+          ) : (
+            <ArrowUp className="h-4 w-4" strokeWidth={1.75} />
+          )}
+        </button>
       </div>
 
-      <textarea
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onPaste={handlePaste}
-        onKeyDown={(event) => {
-          if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') submit();
-        }}
-        rows={docked ? 3 : 6}
-        aria-label="Paste messages, links, emails, or the full story"
-        placeholder="Paste the job offer, recruiter chat, email, website, WhatsApp message, or describe the whole situation..."
-        className="max-h-[42vh] min-h-[96px] w-full resize-y rounded-xl border border-line bg-ink-900 p-3.5 text-sm leading-relaxed text-slate-100 placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
-      />
-
-      {(attachments.length > 0 || detected.length > 0 || notice || evidenceAtLimit) && (
+      {(attachments.length > 0 || notice || evidenceAtLimit) && (
         <div className="mt-3 space-y-2.5">
           {attachments.length > 0 && (
             <div className="grid gap-2 sm:grid-cols-2">
@@ -483,11 +523,23 @@ export function Composer({ onVerify, onReport, reporting = false, docked = false
               ))}
             </div>
           )}
-          <EvidenceChips entities={detected} />
           {notice && (
-            <p className="rounded-lg border border-line bg-ink-800 px-3 py-2 text-xs text-muted" role="status">
-              {notice}
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-ink-800 px-3 py-2 text-xs text-muted" role="status">
+              <span>{notice}</span>
+              {confirmingReport && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmingReport(false);
+                    onVerify(evidence, storableFiles(attachments));
+                    clearAll();
+                  }}
+                  className="rounded-md px-2 py-1 text-xs text-slate-200 transition hover:bg-ink-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                >
+                  Check instead
+                </button>
+              )}
+            </div>
           )}
           {evidenceAtLimit && (
             <p className="rounded-lg border border-risk-needs/40 bg-risk-needs/10 px-3 py-2 text-xs text-risk-needs">
@@ -497,17 +549,6 @@ export function Composer({ onVerify, onReport, reporting = false, docked = false
         </div>
       )}
 
-      {suggestReport && (
-        <button
-          type="button"
-          onClick={() => setIntent('report')}
-          className="mt-3 flex w-full items-start gap-2 rounded-lg border border-risk-needs/40 bg-risk-needs/10 px-3 py-2 text-left text-xs text-risk-needs transition hover:border-risk-needs/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-        >
-          <Flag className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-          <span>This reads like something that may have happened already. File it as a report to protect others.</span>
-        </button>
-      )}
-
       <AnimatePresence initial={false}>
         {recorderOpen && (
           <motion.div
@@ -515,87 +556,24 @@ export function Composer({ onVerify, onReport, reporting = false, docked = false
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.18, ease: 'easeOut' }}
-            className="mt-3 rounded-xl border border-line bg-ink-900 p-3"
+            className="relative mt-3"
           >
-            <VoiceRecorder onTranscript={addRecordingTranscript} />
+            <VoiceRecorder onTranscript={addRecordingTranscript} onCancel={() => setRecorderOpen(false)} />
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => fileInput.current?.click()}
-            title="Attach files"
-            aria-label="Attach files"
-            className="rounded-lg border border-line bg-ink-800 p-2 text-muted transition hover:border-accent/60 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            <Paperclip className="h-4 w-4" strokeWidth={1.75} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setRecorderOpen((open) => !open)}
-            title={recorderOpen ? 'Close recorder' : 'Record voice'}
-            aria-label={recorderOpen ? 'Close recorder' : 'Record voice'}
-            className={`rounded-lg border p-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-              recorderOpen
-                ? 'border-accent/60 bg-accent-soft text-accent'
-                : 'border-line bg-ink-800 text-muted hover:border-accent/60 hover:text-slate-100'
-            }`}
-          >
-            <Mic className="h-4 w-4" strokeWidth={1.75} />
-          </button>
-          {(text || attachments.length > 0) && (
-            <button
-              type="button"
-              onClick={clearAll}
-              title="Clear packet"
-              aria-label="Clear packet"
-              className="rounded-lg border border-line bg-ink-800 p-2 text-muted transition hover:border-risk-needs/60 hover:text-risk-needs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              <Trash2 className="h-4 w-4" strokeWidth={1.75} />
-            </button>
-          )}
-          <input
-            ref={fileInput}
-            type="file"
-            multiple
-            accept=".eml,.msg,.txt,.md,.csv,.pdf,image/*,audio/*,.amr"
-            className="hidden"
-            onChange={(event) => {
-              if (event.target.files) void processFiles(event.target.files);
-              event.target.value = '';
-            }}
-          />
-        </div>
-
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!canSubmit}
-          className="btn-primary min-w-[9.5rem] px-3"
-        >
-          {processing || reporting ? (
-            <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
-          ) : intent === 'report' ? (
-            <Flag className="h-4 w-4" strokeWidth={1.75} />
-          ) : (
-            <ArrowUp className="h-4 w-4" strokeWidth={1.75} />
-          )}
-          {submitLabel()}
-        </button>
-      </div>
-
-      {intent === 'report' && (
-        <div className="mt-3 flex items-start gap-2 rounded-lg border border-line bg-ink-900 px-3 py-2 text-xs text-muted">
-          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-risk-low" strokeWidth={1.75} />
-          <span>
-            Reports save the evidence and give you a reference ID. You will not get a verdict unless you also ask us to
-            check it.
-          </span>
-        </div>
-      )}
+      <input
+        ref={fileInput}
+        type="file"
+        multiple
+        accept=".eml,.msg,.txt,.md,.csv,.pdf,image/*,audio/*,.amr"
+        className="hidden"
+        onChange={(event) => {
+          if (event.target.files) void processFiles(event.target.files);
+          event.target.value = '';
+        }}
+      />
     </section>
   );
 }

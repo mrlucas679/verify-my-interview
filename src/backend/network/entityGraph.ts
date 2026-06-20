@@ -19,13 +19,41 @@ import {
 } from './types';
 import { SEED_REPORTS } from './seedData';
 import { scamNetwork } from './scamNetwork';
-import { cosmosEnabled, listReports, saveReport } from '../data/cosmos';
+import {
+  cosmosEnabled,
+  getGraphRevision,
+  listReports,
+  saveReport,
+  touchGraphRevision,
+} from '../data/cosmos';
 import { logger } from '../observability/logger';
 
 // --- Normalization (hard identifiers only) ----------------------------------
 
+const MULTI_PART_PUBLIC_SUFFIXES = new Set([
+  'co.za',
+  'org.za',
+  'ac.za',
+  'gov.za',
+  'co.uk',
+  'org.uk',
+  'ac.uk',
+  'com.au',
+  'net.au',
+  'org.au',
+  'co.nz',
+  'com.br',
+]);
+
 export function normalizeDomain(raw: string): string {
-  return raw.toLowerCase().trim().replace(/^www\./, '').replace(/\.$/, '');
+  const host = raw.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\.$/, '').split(/[/:?#]/)[0];
+  const labels = host.split('.').filter(Boolean);
+  if (labels.length <= 2) return host;
+  const suffix = labels.slice(-2).join('.');
+  if (MULTI_PART_PUBLIC_SUFFIXES.has(suffix) && labels.length >= 3) {
+    return labels.slice(-3).join('.');
+  }
+  return labels.slice(-2).join('.');
 }
 
 export function normalizeEmail(raw: string): string {
@@ -38,6 +66,17 @@ export function normalizePhone(raw: string): string {
 
 export function normalizeHandle(raw: string): string {
   return raw.toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+export function normalizePaymentHandle(raw: string): string | null {
+  const value = normalizeHandle(raw);
+  const named = value.match(/\b(zelle|cash\s?app|venmo|paypal|interac)\b\s*[:\s]\s*(\$?[a-z0-9][\w.-]{3,})/i);
+  if (named) return `${named[1].replace(/\s+/g, '')}:${named[2].toLowerCase()}`;
+
+  const wallet = value.match(/\b(?:wallet|usdt|btc|eth|crypto)\b[^a-z0-9]{0,12}([a-z0-9][a-z0-9.:-]{7,})/i);
+  if (wallet) return `wallet:${wallet[1].toLowerCase()}`;
+
+  return null;
 }
 
 /**
@@ -75,6 +114,11 @@ function baseTrust(r: NetworkReport): TrustLevel {
   if (r.trustLevel) return r.trustLevel;
   if (r.sourceType === 'seed' || !r.sourceType) return 'verified';
   return 'unverified';
+}
+
+function trustedForPromotion(r: NetworkReport): boolean {
+  const trust = baseTrust(r);
+  return r.sourceType === 'seed' || r.sourceType === 'authoritative' || trust === 'verified' || trust === 'trusted';
 }
 
 // --- Builder ------------------------------------------------------------------
@@ -135,9 +179,11 @@ function build(reports: NetworkReport[]): BuiltGraph {
       edgeType: GraphEdge['type'],
       hard: boolean
     ) => {
+      const attached = new Set<string>();
       for (const raw of values ?? []) {
         const norm = normalize(raw);
-        if (!norm) continue;
+        if (!norm || attached.has(`${type}:${norm}`)) continue;
+        attached.add(`${type}:${norm}`);
         const id = nodeId(type, norm);
         touch(id, type, raw.trim(), r.reportedAt);
         link(rid, id, edgeType);
@@ -152,15 +198,27 @@ function build(reports: NetworkReport[]): BuiltGraph {
     attach('domain', r.domains, normalizeDomain, 'uses_domain', true);
     attach('email', r.emails, normalizeEmail, 'uses_email', true);
     attach('phone', r.phones, normalizePhone, 'uses_phone', true);
-    attach('payment_handle', r.paymentHandles, normalizeHandle, 'requests_payment', true);
+    attach(
+      'payment_handle',
+      r.paymentHandles,
+      (value) => normalizePaymentHandle(value) ?? '',
+      'requests_payment',
+      true
+    );
     // Soft: brands and aliases — never merge, only annotate.
     attach('company', [r.companyName], (v) => v.toLowerCase().trim(), 'impersonates', false);
     attach('recruiter_alias', r.aliases, (v) => v.toLowerCase().trim(), 'alias_of', false);
   }
 
   // Trust promotion: reports sharing any hard identifier become corroborated.
+  const reportById = new Map(reports.map((report) => [nodeId('report', report.reportId), report]));
   for (const [, reportIds] of entityReports) {
     if (reportIds.size < 2) continue;
+    const hasIndependentAnchor = [...reportIds].some((rid) => {
+      const report = reportById.get(rid);
+      return report ? trustedForPromotion(report) : false;
+    });
+    if (!hasIndependentAnchor) continue;
     for (const rid of reportIds) {
       const node = nodes.get(rid)!;
       if (node.trust && TRUST_RANK[node.trust] < TRUST_RANK.corroborated) {
@@ -184,46 +242,110 @@ function build(reports: NetworkReport[]): BuiltGraph {
 // --- Service ------------------------------------------------------------------
 
 const MAX_LOCAL_REPORTS = 500;
+const GRAPH_REFRESH_TTL_MS = 30_000;
+const GRAPH_REVISION_CHECK_TTL_MS = 3_000;
+
+function mergeReports(...groups: NetworkReport[][]): NetworkReport[] {
+  const byId = new Map<string, NetworkReport>();
+  for (const reports of groups) {
+    for (const report of reports) byId.set(report.reportId, report);
+  }
+  return [...byId.values()];
+}
 
 export class EntityGraphService {
   private built: BuiltGraph | null = null;
   private refreshPromise: Promise<void> | null = null;
+  private dirtyWhileRefreshing = false;
+  private lastRefreshAt = 0;
+  private lastRevisionCheckAt = 0;
+  private lastGraphRevision = -1;
   /** Reports submitted while Azure Search is unconfigured (in-memory fallback). */
   private localReports: NetworkReport[] = [];
 
   /** Rebuild from the current corpus. Cheap (≤ a few hundred reports). */
-  async refresh(): Promise<void> {
+  async refresh(force = true): Promise<void> {
+    if (
+      !force &&
+      this.built &&
+      Date.now() - this.lastRefreshAt < GRAPH_REFRESH_TTL_MS &&
+      !(await this.remoteRevisionChanged())
+    ) {
+      return;
+    }
     if (!this.refreshPromise) {
       this.refreshPromise = this.refreshInternal().finally(() => {
         this.refreshPromise = null;
       });
+    } else if (force) {
+      this.dirtyWhileRefreshing = true;
     }
     await this.refreshPromise;
+    if (force && this.dirtyWhileRefreshing) {
+      this.dirtyWhileRefreshing = false;
+      await this.refresh();
+    }
+  }
+
+  /** Mark the durable report corpus as changed so other replicas refresh. */
+  async markDirty(reason: string): Promise<void> {
+    this.lastRefreshAt = 0;
+    if (!cosmosEnabled()) return;
+    try {
+      const rev = await touchGraphRevision(reason);
+      this.lastGraphRevision = Math.max(this.lastGraphRevision, rev);
+      this.lastRevisionCheckAt = Date.now();
+    } catch (e) {
+      logger.warn(`[Graph] revision update failed: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  private async remoteRevisionChanged(): Promise<boolean> {
+    if (!cosmosEnabled()) return false;
+    const now = Date.now();
+    if (now - this.lastRevisionCheckAt < GRAPH_REVISION_CHECK_TTL_MS) return false;
+    this.lastRevisionCheckAt = now;
+    try {
+      const rev = await getGraphRevision();
+      if (rev > this.lastGraphRevision) {
+        this.lastGraphRevision = rev;
+        return true;
+      }
+    } catch (e) {
+      logger.warn(`[Graph] revision check failed: ${e instanceof Error ? e.message : e}`);
+    }
+    return false;
   }
 
   private async refreshInternal(): Promise<void> {
-    let reports: NetworkReport[] = [];
+    let searchReports: NetworkReport[] = [];
     if (scamNetwork.enabled) {
       try {
-        reports = await scamNetwork.listAll();
+        searchReports = await scamNetwork.listAll();
       } catch (e) {
         logger.warn(
           `[Graph] listAll failed, using seed data: ${e instanceof Error ? e.message : e}`
         );
       }
     }
-    if (reports.length === 0) {
-      // Durable corpus: Cosmos-backed community reports (system of record) when
-      // configured, else the in-memory fallback. Seeds are always included.
-      const submitted = cosmosEnabled()
-        ? await listReports().catch((e) => {
-            logger.warn(`[Graph] Cosmos listReports failed: ${e instanceof Error ? e.message : e}`);
-            return this.localReports;
-          })
-        : this.localReports;
-      reports = [...SEED_REPORTS, ...submitted];
-    }
+    const submitted = cosmosEnabled()
+      ? await listReports().catch((e) => {
+          logger.warn(`[Graph] Cosmos listReports failed: ${e instanceof Error ? e.message : e}`);
+          return this.localReports;
+        })
+      : this.localReports;
+    const reports = searchReports.length
+      ? mergeReports(searchReports, submitted)
+      : mergeReports(SEED_REPORTS, submitted);
     this.built = build(reports);
+    this.lastRefreshAt = Date.now();
+    if (cosmosEnabled()) {
+      this.lastGraphRevision = await getGraphRevision().catch((e) => {
+        logger.warn(`[Graph] revision read failed: ${e instanceof Error ? e.message : e}`);
+        return this.lastGraphRevision;
+      });
+      this.lastRevisionCheckAt = Date.now();
+    }
     logger.debug(
       `[Graph] Built entity graph: ${this.built.graph.nodes.length} nodes, ${this.built.graph.edges.length} edges from ${reports.length} reports.`
     );
@@ -239,6 +361,7 @@ export class EntityGraphService {
     if (cosmosEnabled()) {
       try {
         await saveReport(report); // durable system of record
+        await this.markDirty('report.created');
       } catch (e) {
         logger.warn(`[Graph] Cosmos saveReport failed, keeping in memory: ${e instanceof Error ? e.message : e}`);
         this.localReports.push(report);
@@ -253,6 +376,7 @@ export class EntityGraphService {
   }
 
   async getGraph(filter?: { type?: NodeType; minTrust?: TrustLevel }): Promise<EntityGraph> {
+    if (scamNetwork.enabled) await this.refresh(false);
     const { graph } = await this.ensure();
     if (!filter?.type && !filter?.minTrust) return graph;
 
@@ -382,6 +506,7 @@ export class EntityGraphService {
   }
 
   async stats(): Promise<NetworkStats> {
+    if (scamNetwork.enabled) await this.refresh(false);
     const built = await this.ensure();
     const { graph, reports } = built;
 
@@ -415,7 +540,7 @@ export class EntityGraphService {
       byTrust,
       topScamTypes: count(reports.map((r) => r.scamType)),
       topDomains: count(reports.flatMap((r) => r.domains.map(normalizeDomain))),
-      topHandles: count(reports.flatMap((r) => r.paymentHandles.map(normalizeHandle))),
+      topHandles: count(reports.flatMap((r) => r.paymentHandles.map(normalizePaymentHandle).filter((v): v is string => !!v))),
       monthlyTrend: [...months.entries()]
         .map(([month, c]) => ({ month, count: c }))
         .sort((a, b) => a.month.localeCompare(b.month)),

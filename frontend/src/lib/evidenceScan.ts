@@ -125,12 +125,23 @@ export function inferCompanyName(raw: string): string {
   return 'Unknown company';
 }
 
-/** Heuristic: does the text read like the scam ALREADY happened to the writer?
- *  Used only to surface a non-blocking "report this" suggestion — never to route. */
+/** Heuristic: does the text read like the user wants to file a community report
+ *  instead of receiving an immediate verdict? Server-side validation still owns
+ *  the final report payload. */
 export function looksLikeVictimReport(raw: string): boolean {
   const t = raw.toLowerCase();
   if (t.length < 12) return false;
-  return /\b(i (already )?(paid|sent|transferred|deposited)|lost (my )?money|got scammed|was scammed|they took|sent my (id|bank|card)|after i paid)\b/.test(
-    t
-  );
+  const head = t.slice(0, 700).replace(/^user message\s*/i, '').trim();
+  const jobBoardFooter =
+    /\breport this listing\b|\breport this job\b|\breport job\b|\breport listing\b/.test(t);
+  const harm =
+    /\b(i (already )?(paid|sent|transferred|deposited)|lost (my )?money|got scammed|was scammed|they took|sent my (id|bank|card)|after i paid)\b/.test(
+      t
+    );
+  if (harm) return true;
+  if (jobBoardFooter) return false;
+  if (/^(please\s+)?(i\s+want\s+to\s+)?(report|file\s+a\s+report|submit\s+a\s+report)\b/.test(head)) {
+    return true;
+  }
+  return /^\s*(this|it)\s+(is|was|looks like)\s+(a\s+)?(scam|fake recruiter|fake job)\b/.test(head);
 }

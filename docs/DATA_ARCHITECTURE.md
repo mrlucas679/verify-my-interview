@@ -55,6 +55,7 @@ removes the current "Search is the only store" fragility.
 |---|---|---|---|
 | `users` | Account profile, consent flags, prefs | `/id` (Entra subject) | yes (consented) |
 | `cases` | A user's verification cases: evidence refs, report snapshot, retentionExpiry | `/userId` | yes (consented) |
+| `pending_reports` | Public scam reports awaiting admin moderation; not indexed/scored until approved | `/reportId` | **no** (de-identified) |
 | `reports` | Community scam corpus (redacted IOCs, trust) — today's `NetworkReport` | `/reportId` | **no** (de-identified) |
 | `companies` | Resolved company entities | `/id` | no |
 | `trustScores` | Per-entity trust (entity, type, level, points, lastComputed) | `/entityId` | no |
@@ -118,9 +119,11 @@ removes the current "Search is the only store" fragility.
 
 **Endpoints added (slices ③–④):** `GET /me`, `DELETE /me` (self-service erasure),
 `PUT /me/consent` (evidence-storage consent), `GET /cases`, `GET /cases/:id`,
-`POST /evidence`, `GET /evidence/:fileId`, and `DELETE /reports/:id` (admin
-moderation). All require a valid bearer token; all degrade to 503 when their
-backing service is unconfigured.
+`POST /evidence`, `GET /evidence/:fileId`, `GET /reports/pending`,
+`POST /reports/:id/moderate`, and `DELETE /reports/:id` (admin moderation).
+All require a valid bearer token except public report submission; admin routes
+require the `admin` role and degrade to bounded in-memory behavior when Cosmos
+is unconfigured outside production.
 
 **AuthN vs AuthZ (explicit, least-privilege):** authentication (a valid Entra token)
 proves WHO the caller is; authorization decides what they may do.

@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useCase, type HistoryItem } from '../store/caseStore';
+import { useAuth } from '../lib/auth';
 import type { RiskLevel } from '../lib/types';
 
 const RISK_TEXT: Record<RiskLevel, string> = {
@@ -46,7 +47,16 @@ function ItemIcon({ item }: { item: HistoryItem }) {
   );
 }
 
-function HistoryCard({ item, onCheckAgain }: { item: HistoryItem; onCheckAgain: (item: HistoryItem) => void }) {
+function HistoryCard({
+  item,
+  opening,
+  onOpen,
+}: {
+  item: HistoryItem;
+  opening: boolean;
+  onOpen: (item: HistoryItem) => void;
+}) {
+  const actionLabel = item.kind === 'check' && (item.result || item.caseId) ? 'Open' : 'Check';
   return (
     <article className="surface p-4 transition hover:border-accent/40">
       <div className="flex gap-3">
@@ -77,12 +87,13 @@ function HistoryCard({ item, onCheckAgain }: { item: HistoryItem; onCheckAgain: 
                 <Clock3 className="h-3 w-3" strokeWidth={1.75} />
                 {formatDate(item.createdAt)}
               </span>
+              {item.source === 'server' && <span>Account</span>}
               {item.caseId && <span>{item.caseId}</span>}
               {item.reportId && <span>{item.reportId}</span>}
             </div>
-            <button type="button" onClick={() => onCheckAgain(item)} className="btn-ghost px-3 py-2 text-xs">
-              <RotateCcw className="h-3.5 w-3.5" strokeWidth={1.75} />
-              Check again
+            <button type="button" onClick={() => onOpen(item)} disabled={opening} className="btn-ghost px-3 py-2 text-xs">
+              <RotateCcw className={`h-3.5 w-3.5 ${opening ? 'animate-spin' : ''}`} strokeWidth={1.75} />
+              {actionLabel}
             </button>
           </div>
         </div>
@@ -110,8 +121,10 @@ function EmptyHistory() {
 }
 
 export function History() {
-  const { history, clearHistory, newCase, runAnalysis } = useCase();
+  const { history, clearHistory, newCase, openHistoryItem, runAnalysis } = useCase();
+  const auth = useAuth();
   const [query, setQuery] = useState('');
+  const [openingId, setOpeningId] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const filtered = useMemo(() => {
@@ -123,7 +136,14 @@ export function History() {
     );
   }, [history, query]);
 
-  function checkAgain(item: HistoryItem) {
+  async function openItem(item: HistoryItem) {
+    setOpeningId(item.id);
+    if (await openHistoryItem(item.id)) {
+      setOpeningId(null);
+      navigate('/');
+      return;
+    }
+    setOpeningId(null);
     newCase();
     navigate('/');
     void runAnalysis(item.evidence);
@@ -138,7 +158,9 @@ export function History() {
             <div>
               <h1 className="font-display text-2xl font-semibold text-white sm:text-3xl">Past checks</h1>
               <p className="mt-2 text-sm leading-relaxed text-muted">
-                Your previous checks and reports saved on this browser.
+                {auth.authenticated
+                  ? 'Your browser history and account case snapshots.'
+                  : 'Your previous checks and reports saved on this browser.'}
               </p>
             </div>
             {history.length > 0 && (
@@ -159,6 +181,7 @@ export function History() {
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
+                aria-label="Search past checks"
                 placeholder="Search past checks"
                 className="w-full rounded-xl border border-line bg-ink-850 py-3 pl-10 pr-3 text-sm text-slate-100 placeholder:text-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
               />
@@ -167,7 +190,7 @@ export function History() {
             {filtered.length > 0 ? (
               <div className="space-y-3">
                 {filtered.map((item) => (
-                  <HistoryCard key={item.id} item={item} onCheckAgain={checkAgain} />
+                  <HistoryCard key={item.id} item={item} opening={openingId === item.id} onOpen={(next) => void openItem(next)} />
                 ))}
               </div>
             ) : (

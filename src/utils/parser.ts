@@ -7,6 +7,17 @@ function uniq(values: string[]): string[] {
   return Array.from(new Set(values.filter((v) => v && v.length > 0)));
 }
 
+function uniqCaseInsensitive(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    if (!value) return false;
+    const key = value.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -78,6 +89,7 @@ const KNOWN_BRANDS = [
   'Nedbank',
   'Shoprite',
   'Pick n Pay',
+  'TransUnion',
   'Transnet',
   'Eskom',
   'Sasol',
@@ -86,10 +98,24 @@ const KNOWN_BRANDS = [
   'Contoso',
 ];
 
+function isJobBoardSourceMention(evidence: string, brand: string, index: number, length: number): boolean {
+  const before = evidence.slice(Math.max(0, index - 50), index).toLowerCase();
+  const after = evidence.slice(index + length, index + length + 35).toLowerCase();
+  if (brand === 'Google' && /^\s+jobs?\b/.test(after)) return true;
+  if (brand === 'LinkedIn' && /^\s+(?:jobs?\b|page\b)/.test(after)) return true;
+  return /\b(?:source|via|apply on|posted on|from|through)\s*[:\-/ ]*$/.test(before);
+}
+
 function knownBrandsIn(evidence: string): string[] {
   return KNOWN_BRANDS.filter((brand) => {
     const pattern = escapeRegExp(brand).replace(/\\ /g, '\\s+');
-    return new RegExp(`\\b${pattern}\\b`, 'i').test(evidence);
+    const regex = new RegExp(`\\b${pattern}\\b`, 'gi');
+    for (const match of evidence.matchAll(regex)) {
+      if (!isJobBoardSourceMention(evidence, brand, match.index ?? 0, match[0].length)) {
+        return true;
+      }
+    }
+    return false;
   });
 }
 
@@ -200,7 +226,7 @@ export class EvidenceParser {
     const companiesFromDomains = entities.domains
       .map(companyFromDomain)
       .filter((company): company is string => Boolean(company));
-    entities.companies = uniq([...knownBrandsIn(evidence), ...companiesFromDomains, ...companyMatches]);
+    entities.companies = uniqCaseInsensitive([...knownBrandsIn(evidence), ...companiesFromDomains, ...companyMatches]);
 
     return this.sanitize(entities);
   }

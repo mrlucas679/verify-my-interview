@@ -20,6 +20,8 @@ const KEYS = [
   'APPLICATIONINSIGHTS_CONNECTION_STRING',
   'AUTH_ADMIN_EMAILS',
   'ALLOW_INSECURE',
+  'VMI_REPORT_API_KEY',
+  'VMI_ALLOW_PUBLIC_REPORTS',
 ] as const;
 
 let saved: Record<string, string | undefined>;
@@ -44,6 +46,7 @@ function secureProd(): void {
   process.env.AUTH_AUDIENCE = 'api-client-id';
   process.env.COSMOS_CONNECTION_STRING = 'mongodb://localhost:10255/?ssl=true';
   process.env.AUTH_ANON_SALT = 'stable-salt';
+  process.env.VMI_REPORT_API_KEY = 'report-key';
 }
 
 describe('securityConfigViolations', () => {
@@ -74,6 +77,17 @@ describe('securityConfigViolations', () => {
   it('is empty when production is fully configured', () => {
     secureProd();
     expect(securityConfigViolations()).toEqual([]);
+  });
+
+  it('requires an explicit production report-write policy', () => {
+    secureProd();
+    delete process.env.VMI_REPORT_API_KEY;
+    let v = securityConfigViolations();
+    expect(v.some((x) => x.includes('VMI_REPORT_API_KEY'))).toBe(true);
+
+    process.env.VMI_ALLOW_PUBLIC_REPORTS = '1';
+    v = securityConfigViolations();
+    expect(v.some((x) => x.includes('VMI_REPORT_API_KEY'))).toBe(false);
   });
 });
 

@@ -6,6 +6,7 @@ import { useCase } from './store/caseStore';
 
 const Workspace = lazy(() => import('./pages/Workspace').then((mod) => ({ default: mod.Workspace })));
 const History = lazy(() => import('./pages/History').then((mod) => ({ default: mod.History })));
+const AdminReports = lazy(() => import('./pages/AdminReports').then((mod) => ({ default: mod.AdminReports })));
 
 // /s/:id loads a shared dossier into the same investigation workspace.
 function SharedReportRoute() {
@@ -35,6 +36,7 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<Workspace />} />
             <Route path="/history" element={<History />} />
+            <Route path="/admin/reports" element={<AdminReports />} />
             <Route path="/network" element={<Navigate to="/history" replace />} />
             <Route path="/report" element={<Navigate to="/" replace />} />
             <Route path="/s/:id" element={<SharedReportRoute />} />

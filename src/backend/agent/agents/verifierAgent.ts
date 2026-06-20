@@ -41,13 +41,17 @@ export class VerifierAgent {
   async run(
     evidence: string,
     investigation: InvestigatorResult,
-    grounding?: GroundingPassage[]
+    grounding?: GroundingPassage[],
+    signal?: AbortSignal
   ): Promise<VerifierResult> {
     let fallbackReason: string | undefined;
     if (this.runner) {
       try {
-        return await this.runFoundry(evidence, investigation, grounding);
+        return await this.runFoundry(evidence, investigation, grounding, signal);
       } catch (error) {
+        if (signal?.aborted) {
+          throw signal.reason instanceof Error ? signal.reason : new Error('Verifier aborted');
+        }
         fallbackReason = error instanceof Error ? error.message : String(error);
         logger.warn(
           `[Verifier] Foundry path failed, using deterministic: ${fallbackReason}`
@@ -63,7 +67,8 @@ export class VerifierAgent {
   private async runFoundry(
     evidence: string,
     investigation: InvestigatorResult,
-    grounding?: GroundingPassage[]
+    grounding?: GroundingPassage[],
+    signal?: AbortSignal
   ): Promise<VerifierResult> {
     logger.info('[Verifier] Running via Foundry...');
     const { finalText } = await this.runner!.runTurn({
@@ -72,7 +77,7 @@ export class VerifierAgent {
       userMessage: this.userMessage(evidence, investigation, grounding),
       responseFormat: 'json_object', // guaranteed valid JSON object — reliable parse
       // No tools: the critic reasons over evidence already gathered.
-    });
+    }, signal);
 
     const parsed = extractJsonObject(finalText) ?? {};
     const signals: InvestigationSignals = {

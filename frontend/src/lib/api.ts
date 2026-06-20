@@ -1,4 +1,4 @@
-import type { AnalyzeResponse } from './types';
+import type { AnalyzeResponse, RiskLevel, TrustLevel } from './types';
 
 export class ApiError extends Error {
   constructor(
@@ -14,6 +14,10 @@ export class ApiError extends Error {
 
 interface RequestOptions {
   signal?: AbortSignal;
+}
+
+interface AnalyzeOptions extends RequestOptions {
+  evidenceIds?: string[];
 }
 
 // ── Auth token injection (pluggable) ─────────────────────────────────────────
@@ -40,7 +44,9 @@ async function authHeader(): Promise<Record<string, string>> {
 }
 
 const ROUTE_TIMEOUT_MS = {
+  account: 20_000,
   chat: 30_000,
+  evidence: 45_000,
   upload: 75_000,
   transcribe: 130_000,
   analyze: 90_000,
@@ -58,6 +64,55 @@ export interface CaseContext {
   case_summary: string;
   red_flags: string[];
   matches: Array<{ reportId: string; scamType: string; similarity: number }>;
+}
+
+export interface AccountProfile {
+  user: {
+    id: string;
+    email?: string;
+    name?: string;
+    provider?: string;
+    plan: 'free';
+    consent: { store_evidence: boolean; at: string };
+  };
+  usage: { period: string; count: number };
+}
+
+export interface ServerCase {
+  _id: string;
+  userId?: string;
+  createdAt: string;
+  riskLevel: RiskLevel;
+  riskScore: number;
+  caseSummary: string;
+  evidenceIds: string[];
+  result?: AnalyzeResponse;
+}
+
+export interface PendingReport {
+  _id: string;
+  reportId: string;
+  companyName: string;
+  aliases?: string[];
+  scamType: string;
+  description: string;
+  domains: string[];
+  emails: string[];
+  phones?: string[];
+  paymentHandles?: string[];
+  location: string;
+  reportedAt: string;
+  sourceType: string;
+  trustLevel: TrustLevel;
+  status: 'pending_review';
+  submittedAt: string;
+}
+
+export interface ModerateReportResult {
+  ok: true;
+  reportId: string;
+  action: 'approved' | 'rejected';
+  indexed: boolean;
 }
 
 function timeoutMessage(path: string): string {
@@ -157,18 +212,57 @@ export async function transcribeAudio(
 
 export async function analyze(
   evidence: string,
-  options: RequestOptions = {}
+  options: AnalyzeOptions = {}
 ): Promise<AnalyzeResponse> {
+  const evidenceIds = options.evidenceIds?.filter(Boolean).slice(0, 20);
   return fetchJson(
     '/analyze',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ evidence }),
+      body: JSON.stringify(evidenceIds?.length ? { evidence, evidenceIds } : { evidence }),
     },
     ROUTE_TIMEOUT_MS.analyze,
     options.signal
   );
+}
+
+export async function getProfile(options: RequestOptions = {}): Promise<AccountProfile> {
+  return fetchJson('/me', { method: 'GET' }, ROUTE_TIMEOUT_MS.account, options.signal);
+}
+
+export async function setEvidenceConsent(
+  storeEvidence: boolean,
+  options: RequestOptions = {}
+): Promise<{ consent: AccountProfile['user']['consent'] }> {
+  return fetchJson(
+    '/me/consent',
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ store_evidence: storeEvidence }),
+    },
+    ROUTE_TIMEOUT_MS.account,
+    options.signal
+  );
+}
+
+export async function deleteAccount(options: RequestOptions = {}): Promise<{ ok: true }> {
+  return fetchJson('/me', { method: 'DELETE' }, ROUTE_TIMEOUT_MS.account, options.signal);
+}
+
+export async function listCases(options: RequestOptions = {}): Promise<{ cases: ServerCase[] }> {
+  return fetchJson('/cases', { method: 'GET' }, ROUTE_TIMEOUT_MS.account, options.signal);
+}
+
+export async function getCase(id: string, options: RequestOptions = {}): Promise<ServerCase> {
+  return fetchJson(`/cases/${encodeURIComponent(id)}`, { method: 'GET' }, ROUTE_TIMEOUT_MS.account, options.signal);
+}
+
+export async function storeEvidence(file: File, options: RequestOptions = {}): Promise<{ evidenceId: string }> {
+  const fd = new FormData();
+  fd.append('file', file);
+  return fetchJson('/evidence', { method: 'POST', body: fd }, ROUTE_TIMEOUT_MS.evidence, options.signal);
 }
 
 /**
@@ -220,7 +314,7 @@ export interface ScamReportInput {
 export async function submitReport(
   input: ScamReportInput,
   options: RequestOptions = {}
-): Promise<{ ok: boolean; reportId: string }> {
+): Promise<{ ok: boolean; reportId: string; indexed: boolean; status: 'pending_review' | 'indexed' }> {
   return fetchJson(
     '/report',
     {
@@ -229,6 +323,27 @@ export async function submitReport(
       body: JSON.stringify(input),
     },
     30_000,
+    options.signal
+  );
+}
+
+export async function listPendingReports(options: RequestOptions = {}): Promise<{ reports: PendingReport[] }> {
+  return fetchJson('/reports/pending', { method: 'GET' }, ROUTE_TIMEOUT_MS.account, options.signal);
+}
+
+export async function moderateReport(
+  reportId: string,
+  action: 'approve' | 'reject',
+  options: RequestOptions = {}
+): Promise<ModerateReportResult> {
+  return fetchJson(
+    `/reports/${encodeURIComponent(reportId)}/moderate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    },
+    ROUTE_TIMEOUT_MS.account,
     options.signal
   );
 }

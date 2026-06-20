@@ -84,10 +84,17 @@ function issuer(): string {
 let jwksUri = '';
 let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 
+export function jwksUriForIssuer(value: string): string {
+  const base = value.replace(/\/+$/, '').replace(/\/v2\.0$/i, '');
+  return `${base}/discovery/v2.0/keys`;
+}
+
 function getJwks(): ReturnType<typeof createRemoteJWKSet> {
-  // Entra External ID exposes keys at <issuer>/discovery/v2.0/keys; allow an
-  // explicit override for non-standard tenants.
-  const uri = process.env.AUTH_JWKS_URI || `${issuer()}/discovery/v2.0/keys`;
+  // Entra exposes keys beside the v2 issuer path:
+  //   issuer: https://.../<tenant>/v2.0
+  //   keys:   https://.../<tenant>/discovery/v2.0/keys
+  // AUTH_JWKS_URI remains available for non-standard tenants.
+  const uri = process.env.AUTH_JWKS_URI || jwksUriForIssuer(issuer());
   if (!jwks || uri !== jwksUri) {
     jwksUri = uri;
     jwks = createRemoteJWKSet(new URL(uri));

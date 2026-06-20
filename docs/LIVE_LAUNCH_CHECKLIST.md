@@ -55,15 +55,16 @@ closed or explicitly accepted in writing.
   `@azure/monitor-opentelemetry`. `npm audit fix --force` would install a
   breaking Azure Monitor package version, so this needs an explicit dependency
   decision.
-- [ ] `npm run azure:doctor -- --require-live` is **not ready** in this terminal:
-  `APPLICATIONINSIGHTS_CONNECTION_STRING` is missing, Azure CLI is unavailable
-  or not logged in, and Azure Search is not configured in the process.
+- [x] Live Azure Functions preview is deployed at
+  `https://vmi-online-3907.azurewebsites.net`; `/health`, share persistence,
+  Foundry smoke, telemetry, HTTPS redirect, and security headers were verified
+  on 2026-06-19.
 - [ ] The working tree is dirty. Ship only after reviewing, committing, and
   pushing the intended changes.
 - [ ] README and some docs still describe the older graph/network product and
   must be updated before external users or investors see the repo.
-- [ ] A post-redesign browser visual pass has not been run because servers should
-  not be started without explicit approval.
+- [x] Post-redesign browser screenshots were captured against the live URL at
+  desktop and mobile widths under `output/playwright/`.
 
 ## P0 - Must Finish Before Internal Live Preview
 
@@ -169,10 +170,12 @@ These are required before real users can rely on the service.
 - [ ] Dashboards for request volume, latency, error rate, engine mode,
   Foundry fallback rate, analyze timeout rate, report submissions, upload errors,
   transcription errors, and trial exhaustion.
-- [ ] Alerts for 5xx spike, analyze failure spike, Foundry fallback spike,
-  OCR/transcribe failures, and quota/cost anomalies.
-- [ ] Operator runbook for report moderation, false-positive reports, abuse,
-  privacy requests, and outage handling.
+- [x] Baseline Azure Monitor alerts for production 5xx, latency, queue backlog,
+  and high 4xx volume. Configured by `npm run azure:monitor`.
+- [ ] Deeper App Insights/KQL alerts for Foundry fallback, OCR/transcribe
+  failures, and quota/cost anomalies.
+- [x] Operator runbook for report moderation, false-positive reports, abuse,
+  privacy requests, and outage handling: `docs/OPERATIONS_RUNBOOK.md`.
 - [ ] Daily backup/export posture for durable stores documented.
 
 ### Reliability And Safety

@@ -11,6 +11,7 @@ import type { Response } from 'express';
 import {
   AuthedRequest,
   attachIdentity,
+  rollbackAnalyzeAccess,
   enforceAnalyzeAccess,
   requireAdmin,
   requireAuth,
@@ -125,6 +126,24 @@ describe('enforceAnalyzeAccess', () => {
     expect(next2).not.toHaveBeenCalled();
     expect(res2.statusCode).toBe(401);
     expect((res2.body as { code?: string }).code).toBe('trial_exhausted');
+  });
+
+  it('releases an anonymous trial reservation when analysis fails', async () => {
+    enableAuth();
+    process.env.AUTH_ANON_TRIAL_MAX = '1';
+    const ip = '203.0.113.178';
+    const req1 = mockReq({ ip });
+    const next1 = jest.fn();
+    await enforceAnalyzeAccess(req1, mockRes() as unknown as Response, next1);
+    expect(next1).toHaveBeenCalledTimes(1);
+
+    await rollbackAnalyzeAccess(req1);
+
+    const next2 = jest.fn();
+    const res2 = mockRes();
+    await enforceAnalyzeAccess(mockReq({ ip }), res2 as unknown as Response, next2);
+    expect(next2).toHaveBeenCalledTimes(1);
+    expect(res2.statusCode).toBe(200);
   });
 
   it('requires sign-in immediately when AUTH_ANON_TRIAL_MAX is 0', async () => {

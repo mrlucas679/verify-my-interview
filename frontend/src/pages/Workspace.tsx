@@ -1,63 +1,31 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import {
   AlertTriangle,
-  BookCheck,
-  Building2,
   Check,
-  CheckCircle2,
   Clipboard,
-  FileText,
-  FileSearch,
-  Gavel,
-  History as HistoryIcon,
-  ListChecks,
+  ExternalLink,
   Loader2,
-  MailWarning,
-  Plus,
-  Search,
   Share2,
-  ShieldCheck,
   Square,
+  ThumbsDown,
+  ThumbsUp,
   Volume2,
-  type LucideIcon,
 } from 'lucide-react';
 import { useCase, type CaseEntry } from '../store/caseStore';
-import { shareReport, submitReport } from '../lib/api';
+import { ApiError, chat, shareReport, storeEvidence, submitReport, type CaseContext, type ChatMessage } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import { reportNarration } from '../lib/communication';
-import type { AnalyzeResponse, Entities, RiskLevel, RiskReport } from '../lib/types';
-import { Composer, type ReportInput } from '../components/Composer';
-import { IntelCard } from '../components/IntelCard';
-import { VerdictCard } from '../components/VerdictCard';
-import { InvestigationLayers } from '../components/InvestigationLayers';
-import { Findings } from '../components/Findings';
-import { SimilarReports } from '../components/SimilarReports';
-import { GuidanceCitations } from '../components/GuidanceCitations';
-import { ChatPanel } from '../components/ChatPanel';
+import type { AnalyzeResponse, RiskLevel, RiskReport, StructuredSignal } from '../lib/types';
+import { Composer, type ComposerEvidenceFile, type ReportInput } from '../components/Composer';
 
-type IntelTint = 'scam' | 'suspicious' | 'needs' | 'low' | 'inconclusive';
-
-const LEVEL_TINT: Record<RiskLevel, IntelTint> = {
-  'Likely Scam': 'scam',
-  Suspicious: 'suspicious',
-  'Needs More Verification': 'needs',
-  'Low Risk': 'low',
-  Inconclusive: 'inconclusive',
+const RISK_TONE: Record<RiskLevel, string> = {
+  'Likely Scam': 'text-risk-scam',
+  Suspicious: 'text-risk-suspicious',
+  'Needs More Verification': 'text-risk-needs',
+  'Low Risk': 'text-risk-low',
+  Inconclusive: 'text-risk-inconclusive',
 };
-
-const RUN_STEPS = [
-  'Extracting names, links, contacts, and payment clues',
-  'Checking company and recruiter identifiers',
-  'Reviewing domains, email headers, and document text',
-  'Looking for similar reports',
-  'Composing evidence-backed recommendations',
-];
-
-const TRUST_MARKERS: { icon: LucideIcon; label: string }[] = [
-  { icon: ShieldCheck, label: 'Evidence is redacted before analysis' },
-  { icon: BookCheck, label: 'Guidance cites official sources' },
-  { icon: HistoryIcon, label: 'Checks are saved to history' },
-];
 
 function verdictDigest(report: RiskReport): string {
   const lines = [
@@ -70,118 +38,57 @@ function verdictDigest(report: RiskReport): string {
 }
 
 function compactEvidence(evidence: string): string {
-  const clean = evidence.replace(/\n{3,}/g, '\n\n').trim();
+  const clean = evidence
+    .replace(/^User message\s*\n+/i, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   if (clean.length <= 900) return clean;
   return `${clean.slice(0, 900).trim()}...`;
 }
 
-function evidenceMeta(evidence: string): string {
-  const attachments = evidence.match(/^Attachment:/gm)?.length ?? 0;
-  const chars = evidence.trim().length;
-  if (attachments > 0) return `${attachments} attachment${attachments === 1 ? '' : 's'} - ${chars.toLocaleString()} chars`;
-  return `${chars.toLocaleString()} chars`;
-}
-
-function formatList(values: string[], empty: string): ReactNode {
-  const items = values.filter(Boolean).slice(0, 6);
-  if (items.length === 0) return <p className="text-sm text-muted">{empty}</p>;
-  return (
-    <ul className="space-y-1.5">
-      {items.map((value) => (
-        <li key={value} className="rounded-lg border border-line bg-ink-900 px-3 py-2 font-mono text-xs text-slate-300">
-          {value}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function EntityGroup({ label, values }: { label: string; values: string[] }) {
-  if (values.length === 0) return null;
-  return (
-    <div>
-      <p className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">{label}</p>
-      {formatList(values, 'No identifiers found.')}
-    </div>
-  );
-}
-
-function CompanyIntel({ report }: { report: RiskReport }) {
-  const companies = report.entities.companies.slice(0, 6);
-  const facts = report.verified_facts.slice(0, 5);
-  const positives = report.positive_signals.slice(0, 4);
-  return (
-    <div className="grid gap-3 md:grid-cols-[0.85fr_1.15fr]">
-      <div className="surface-2 p-3">
-        <p className="mb-2 text-xs font-medium text-muted">Claimed companies</p>
-        {formatList(companies, 'No company name was clear in the evidence.')}
-      </div>
-      <div className="space-y-3">
-        <div>
-          <p className="mb-1.5 text-xs font-medium text-muted">Verified facts</p>
-          {facts.length ? (
-            <ul className="space-y-1.5 text-sm text-slate-300">
-              {facts.map((fact) => (
-                <li key={fact} className="flex gap-2">
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-risk-low" strokeWidth={1.75} />
-                  <span>{fact}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-muted">No verified company facts were strong enough to rely on.</p>
-          )}
-        </div>
-        {positives.length > 0 && (
-          <div>
-            <p className="mb-1.5 text-xs font-medium text-muted">Legitimacy signals</p>
-            <ul className="space-y-1.5 text-sm text-slate-300">
-              {positives.map((signal) => (
-                <li key={signal}>{signal}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function EvidenceIntel({ entities }: { entities: Entities }) {
-  const groups = [
-    { label: 'Emails', values: entities.emails },
-    { label: 'Domains', values: entities.domains },
-    { label: 'URLs', values: entities.urls },
-    { label: 'Phones', values: entities.phones },
-    { label: 'Money requests', values: entities.money_requests },
-    { label: 'Job titles', values: entities.job_titles },
-  ];
-  const visible = groups.filter((group) => group.values.length > 0).slice(0, 6);
-  if (visible.length === 0) {
-    return <p className="text-sm text-muted">No structured identifiers were extracted from this evidence packet.</p>;
+function detectiveFailure(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.code === 'CLIENT_TIMEOUT') {
+      return 'I could not finish that reply in time. Ask one shorter question and I will try again.';
+    }
+    if (error.code === 'CHAT_BAD_PAYLOAD') {
+      return 'I could not read this case well enough to answer safely. Start a new check, then ask again.';
+    }
+    if (error.status >= 500 || error.code === 'CHAT_RUNTIME_ERROR') {
+      return 'I cannot answer this follow-up right now. The report is still available, and you can try again in a moment.';
+    }
   }
-  return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {visible.map((group) => (
-        <EntityGroup key={group.label} label={group.label} values={group.values} />
-      ))}
-    </div>
-  );
+  return error instanceof Error ? error.message : 'I cannot answer this follow-up right now. Please try again.';
 }
 
 function VerdictActions({ result, report }: { result: AnalyzeResponse; report: RiskReport }) {
   const [shareState, setShareState] = useState<'idle' | 'sharing' | 'copied' | 'error'>('idle');
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [feedback, setFeedback] = useState<'helpful' | 'not-helpful' | null>(null);
   const [speaking, setSpeaking] = useState(false);
   const timer = useRef<number | null>(null);
+  const copyTimer = useRef<number | null>(null);
   const speechSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
   useEffect(
     () => () => {
       if (timer.current) window.clearTimeout(timer.current);
+      if (copyTimer.current) window.clearTimeout(copyTimer.current);
       if (speechSupported) window.speechSynthesis.cancel();
     },
     [speechSupported]
   );
+
+  async function copyVerdict() {
+    try {
+      await navigator.clipboard.writeText(verdictDigest(report));
+      setCopyState('copied');
+    } catch {
+      setCopyState('error');
+    }
+    if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopyState('idle'), 2500);
+  }
 
   async function share() {
     if (shareState === 'sharing') return;
@@ -217,11 +124,21 @@ function VerdictActions({ result, report }: { result: AnalyzeResponse; report: R
   }
 
   const ShareIcon = shareState === 'copied' ? Check : Share2;
+  const CopyIcon = copyState === 'copied' ? Check : Clipboard;
+  const copyLabel = copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Unavailable' : 'Copy';
   const shareLabel =
     shareState === 'sharing' ? 'Saving' : shareState === 'copied' ? 'Copied' : shareState === 'error' ? 'Unavailable' : 'Share';
 
   return (
     <>
+      <button
+        type="button"
+        onClick={copyVerdict}
+        aria-label="Copy the verdict summary"
+        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-faint transition hover:bg-ink-800 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      >
+        <CopyIcon className="h-3.5 w-3.5" strokeWidth={1.75} /> {copyLabel}
+      </button>
       <button
         type="button"
         onClick={share}
@@ -242,6 +159,24 @@ function VerdictActions({ result, report }: { result: AnalyzeResponse; report: R
           {speaking ? <Square className="h-3.5 w-3.5" strokeWidth={1.75} /> : <Volume2 className="h-3.5 w-3.5" strokeWidth={1.75} />}
         </button>
       )}
+      <button
+        type="button"
+        onClick={() => setFeedback('helpful')}
+        aria-pressed={feedback === 'helpful'}
+        aria-label="Mark this investigation helpful"
+        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-faint transition hover:bg-ink-800 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 aria-pressed:text-risk-low"
+      >
+        <ThumbsUp className="h-3.5 w-3.5" strokeWidth={1.75} /> Helpful
+      </button>
+      <button
+        type="button"
+        onClick={() => setFeedback('not-helpful')}
+        aria-pressed={feedback === 'not-helpful'}
+        aria-label="Mark this investigation not helpful"
+        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-faint transition hover:bg-ink-800 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 aria-pressed:text-risk-needs"
+      >
+        <ThumbsDown className="h-3.5 w-3.5" strokeWidth={1.75} /> Not helpful
+      </button>
     </>
   );
 }
@@ -249,15 +184,8 @@ function VerdictActions({ result, report }: { result: AnalyzeResponse; report: R
 function UserEvidencePacket({ evidence }: { evidence: string }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[92%] rounded-2xl border border-line bg-ink-800 px-4 py-3 shadow-card sm:max-w-[84%]">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <span className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-faint">
-            <FileText className="h-3.5 w-3.5" strokeWidth={1.75} />
-            Evidence packet
-          </span>
-          <span className="font-mono text-[11px] text-faint">{evidenceMeta(evidence)}</span>
-        </div>
-        <p className="max-h-36 overflow-hidden whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
+      <div className="max-w-[90%] rounded-2xl bg-ink-800 px-3.5 py-2.5 shadow-card sm:max-w-[78%]">
+        <p className="max-h-28 overflow-hidden whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
           {compactEvidence(evidence)}
         </p>
       </div>
@@ -266,96 +194,256 @@ function UserEvidencePacket({ evidence }: { evidence: string }) {
 }
 
 function RunningCard() {
-  const [step, setStep] = useState(0);
-  const reduceMotion = useReducedMotion();
-
-  useEffect(() => {
-    if (reduceMotion) return;
-    const timer = setInterval(() => setStep((current) => (current + 1) % RUN_STEPS.length), 1100);
-    return () => clearInterval(timer);
-  }, [reduceMotion]);
-
   return (
-    <div className="surface flex items-start gap-4 p-5" role="status" aria-live="polite">
-      <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-accent" strokeWidth={1.75} />
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-slate-100">Investigation running</p>
-        <p className="mt-1 font-mono text-xs text-muted">{RUN_STEPS[reduceMotion ? 0 : step]}</p>
+    <div className="flex items-center gap-2 text-sm text-muted" role="status" aria-live="polite">
+      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" strokeWidth={1.75} />
+      Checking...
+    </div>
+  );
+}
+
+function FollowUpMessages({ messages, loading }: { messages: ChatMessage[]; loading: boolean }) {
+  if (messages.length === 0 && !loading) return null;
+  return (
+    <div className="space-y-2.5">
+      {messages.map((message, index) => (
+        <motion.div
+          key={`${message.role}-${index}`}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+          className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}
+        >
+          <div
+            className={`max-w-[90%] whitespace-pre-wrap rounded-xl px-3 py-2.5 text-sm leading-relaxed sm:max-w-[78%] ${
+              message.role === 'user'
+                ? 'bg-accent text-white'
+                : 'border border-line bg-ink-800 text-slate-200 shadow-card'
+            }`}
+          >
+            {message.content}
+          </div>
+        </motion.div>
+      ))}
+      {loading && (
+        <div className="flex justify-start">
+          <div className="inline-flex items-center gap-2 rounded-xl border border-line bg-ink-800 px-3 py-2 text-sm text-muted shadow-card">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" strokeWidth={1.75} />
+            Reviewing the report...
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function sentence(value: string): string {
+  const clean = value.trim().replace(/\s+/g, ' ');
+  if (!clean) return '';
+  return /[.!?]$/.test(clean) ? clean : `${clean}.`;
+}
+
+function evidenceBullets(report: RiskReport, signals: StructuredSignal[]): string[] {
+  const bullets = [
+    ...report.positive_signals.slice(0, 2),
+    ...report.red_flags.slice(0, 3),
+    ...signals
+      .filter((signal) => signal.category === 'positive')
+      .map((signal) => signal.label)
+      .slice(0, 2),
+    ...report.verified_facts.slice(0, 2),
+  ];
+  return Array.from(new Set(bullets.map(sentence).filter(Boolean))).slice(0, 6);
+}
+
+function introParagraph(report: RiskReport, signals: StructuredSignal[]): string {
+  const positives = signals.filter((signal) => signal.category === 'positive').length;
+  const concerns = report.red_flags.length;
+  if (report.risk_level === 'Low Risk') {
+    return positives
+      ? 'I checked the information you submitted and found more signs of a real opportunity than signs of fraud.'
+      : 'I checked the information you submitted and did not find strong scam indicators in what was provided.';
+  }
+  if (report.risk_level === 'Likely Scam') {
+    return 'I checked the information you submitted and found strong warning signs that match job-scam behaviour.';
+  }
+  if (concerns && positives) {
+    return 'I checked the information you submitted and found a mix of positive and concerning signals.';
+  }
+  return 'I checked the information you submitted, but there is not enough clean evidence to fully verify it yet.';
+}
+
+function recommendationLead(report: RiskReport): string {
+  if (report.risk_level === 'Low Risk') {
+    return 'It still makes sense to continue through the employer’s official channel and avoid sharing sensitive information until the process is clearly legitimate.';
+  }
+  if (report.risk_level === 'Likely Scam') {
+    return 'My recommendation is to stop engaging unless you can confirm the role directly through the real company’s official website or phone number.';
+  }
+  return 'My recommendation is to independently confirm the role through the company’s official channels before sending documents, banking details, or money.';
+}
+
+function checkedSubject(report: RiskReport): string {
+  const company = report.entities.companies[0];
+  const job = report.entities.job_titles[0];
+  const email = report.entities.emails[0];
+  const domain = report.entities.domains[0];
+  const parts = [company, job, email, domain].filter(Boolean).slice(0, 4);
+  return parts.length ? `Checked: ${parts.join(' · ')}` : 'Checked: the evidence you submitted';
+}
+
+interface ReferenceLink {
+  title: string;
+  source: string;
+  url: string;
+}
+
+const TRUSTED_GUIDANCE_HOSTS = new Set([
+  'consumer.ftc.gov',
+  'www.ic3.gov',
+  'ic3.gov',
+  'www.bbb.org',
+  'bbb.org',
+  'www.fbi.gov',
+  'fbi.gov',
+]);
+
+function safeHttpsUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function firstHttpsUrl(value: string): string | null {
+  const match = value.match(/https:\/\/[^\s)]+/i);
+  return match ? safeHttpsUrl(match[0]) : null;
+}
+
+function officialDomainUrl(detail: string): string | null {
+  const match = detail.match(/^([a-z0-9.-]+\.[a-z]{2,})\b/i);
+  if (!match) return null;
+  return safeHttpsUrl(`https://${match[1].toLowerCase()}`);
+}
+
+function hostLabel(value: string): string {
+  try {
+    return new URL(value).hostname.replace(/^www\./, '');
+  } catch {
+    return value;
+  }
+}
+
+function trustedGuidanceUrl(value: string): string | null {
+  const url = safeHttpsUrl(value);
+  if (!url) return null;
+  return TRUSTED_GUIDANCE_HOSTS.has(hostLabel(url)) ? url : null;
+}
+
+function sourceReferences(result: AnalyzeResponse): ReferenceLink[] {
+  const refs: ReferenceLink[] = [];
+  for (const citation of result.report.guidance_citations.slice(0, 3)) {
+    const url = trustedGuidanceUrl(citation.url);
+    if (url) refs.push({ title: citation.title, source: citation.source, url });
+  }
+
+  for (const signal of result.signals) {
+    if (signal.category !== 'positive') continue;
+    const url =
+      signal.id === 'official_listing'
+        ? firstHttpsUrl(signal.evidence.detail)
+        : signal.id === 'official_domain_match'
+          ? officialDomainUrl(signal.evidence.detail)
+          : null;
+    if (url) refs.push({ title: signal.label, source: hostLabel(url), url });
+  }
+
+  const seen = new Set<string>();
+  return refs.filter((ref) => {
+    if (seen.has(ref.url)) return false;
+    seen.add(ref.url);
+    return true;
+  }).slice(0, 5);
+}
+
+function SourceReferences({ result }: { result: AnalyzeResponse }) {
+  const refs = sourceReferences(result);
+  if (!refs.length) return null;
+  return (
+    <div className="pt-1">
+      <p className="mb-1.5 text-sm font-medium text-slate-100">References</p>
+      <div className="flex flex-wrap gap-2">
+        {refs.map((ref) => (
+          <a
+            key={ref.url}
+            href={ref.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-line bg-ink-850 px-2 py-1 text-xs text-muted transition hover:border-accent/50 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <ExternalLink className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+            <span className="truncate">{ref.source}</span>
+          </a>
+        ))}
       </div>
     </div>
   );
 }
 
 function ResultGroup({ result, isLatest }: { result: AnalyzeResponse; isLatest: boolean }) {
-  const { report, trace, signals, matches } = result;
+  const { report, signals } = result;
+  const bullets = evidenceBullets(report, signals);
+  const tone = RISK_TONE[report.risk_level];
+
   return (
-    <div className="space-y-3">
-      <IntelCard
-        icon={Gavel}
-        title="Verdict"
-        tint={LEVEL_TINT[report.risk_level]}
-        meta={`${report.risk_score}/100`}
-        copyText={verdictDigest(report)}
-        actions={isLatest ? <VerdictActions result={result} report={report} /> : undefined}
-      >
-        <VerdictCard report={report} />
-      </IntelCard>
+    <article className="max-w-[94%] space-y-3 px-1 py-1 text-sm leading-relaxed text-slate-200 sm:max-w-[82%]">
+      <div>
+        <h2 className={`font-display text-lg font-semibold ${tone}`}>{report.risk_level}</h2>
+        <p className="mt-1 text-xs text-faint">{checkedSubject(report)}</p>
+      </div>
+      <p>{introParagraph(report, signals)}</p>
+      <p>{sentence(report.case_summary)}</p>
+      <p>{recommendationLead(report)}</p>
 
-      <IntelCard icon={Building2} title="Company verification" tint="accent" defaultExpanded={false}>
-        <CompanyIntel report={report} />
-      </IntelCard>
-
-      <IntelCard icon={MailWarning} title="Evidence and identifiers" tint="default" defaultExpanded={false}>
-        <EvidenceIntel entities={report.entities} />
-      </IntelCard>
-
-      <IntelCard icon={ListChecks} title="Why this score" tint="default">
-        <Findings signals={signals} />
-      </IntelCard>
-
-      <IntelCard icon={Search} title="Investigation trace" tint="accent" defaultExpanded={false}>
-        <InvestigationLayers trace={trace} />
-      </IntelCard>
-
-      {matches.length > 0 && (
-        <IntelCard icon={FileSearch} title="Similar reports" tint="default" defaultExpanded={false}>
-          <SimilarReports matches={matches} />
-        </IntelCard>
-      )}
-
-      {report.guidance_citations?.length > 0 && (
-        <IntelCard icon={BookCheck} title="Official guidance" tint="default" defaultExpanded={false}>
-          <GuidanceCitations citations={report.guidance_citations} />
-        </IntelCard>
+      {bullets.length > 0 && (
+        <div className="pt-1">
+          <p className="mb-1.5 text-sm font-medium text-slate-100">What influenced this</p>
+          <ul className="space-y-1.5">
+            {bullets.map((item) => (
+              <li key={item} className="flex gap-2">
+                <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-muted" aria-hidden="true" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {report.recommended_next_steps.length > 0 && (
-        <IntelCard icon={Clipboard} title="Recommended next steps" tint="accent">
-          <ol className="space-y-2">
-            {report.recommended_next_steps.slice(0, 8).map((step, index) => (
-              <li key={step} className="flex gap-2.5 text-sm text-slate-300">
-                <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-accent-soft font-mono text-[11px] text-accent">
-                  {index + 1}
-                </span>
-                {step}
+        <div className="pt-1">
+          <p className="mb-1.5 text-sm font-medium text-slate-100">Recommended actions</p>
+          <ul className="space-y-1.5">
+            {report.recommended_next_steps.slice(0, 4).map((step) => (
+              <li key={step} className="flex gap-2">
+                <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-accent" aria-hidden="true" />
+                <span>{sentence(step)}</span>
               </li>
             ))}
-          </ol>
-          {report.missing_evidence.length > 0 && (
-            <div className="surface-2 mt-3 p-3">
-              <p className="mb-1.5 text-xs font-medium text-muted">To make the verdict stronger, add</p>
-              <ul className="space-y-1">
-                {report.missing_evidence.slice(0, 6).map((missing) => (
-                  <li key={missing} className="text-xs text-faint">
-                    {missing}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </IntelCard>
+          </ul>
+        </div>
       )}
-    </div>
+
+      <SourceReferences result={result} />
+
+      {isLatest && (
+        <div className="flex flex-wrap items-center gap-1 border-t border-line/60 pt-2">
+          <VerdictActions result={result} report={report} />
+        </div>
+      )}
+    </article>
   );
 }
 
@@ -365,15 +453,16 @@ interface ReportAck {
   company: string;
   evidence: string;
   reportId: string | null;
+  reviewStatus: 'pending_review' | 'indexed' | null;
   status: 'submitting' | 'done' | 'error';
   error: string | null;
   createdAt: number;
 }
 
-function ReportAckCard({ ack, onAlsoCheck }: { ack: ReportAck; onAlsoCheck: () => void }) {
+function ReportAckCard({ ack }: { ack: ReportAck }) {
   if (ack.status === 'error') {
     return (
-      <div role="alert" className="surface flex items-start gap-3 border-risk-scam/40 p-5 text-sm text-risk-scam">
+    <div role="alert" className="flex max-w-[94%] items-start gap-3 rounded-xl border border-risk-scam/40 bg-ink-850/70 px-3 py-2.5 text-sm text-risk-scam shadow-card sm:max-w-[82%]">
         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.75} />
         <div>
           <p className="font-medium">We could not file that report.</p>
@@ -384,34 +473,23 @@ function ReportAckCard({ ack, onAlsoCheck }: { ack: ReportAck; onAlsoCheck: () =
   }
 
   return (
-    <IntelCard
-      icon={ack.status === 'submitting' ? Loader2 : CheckCircle2}
-      title={ack.status === 'submitting' ? 'Filing report' : 'Report received'}
-      tint="low"
-      meta={ack.reportId ?? undefined}
-    >
+    <div className="max-w-[94%] rounded-xl border border-line/70 bg-ink-850/70 px-3 py-2.5 text-sm text-slate-300 shadow-card sm:max-w-[82%]">
       {ack.status === 'submitting' ? (
-        <p className="text-sm text-muted">Saving your report.</p>
+        <div className="flex items-center gap-2 text-sm text-muted">
+          <Loader2 className="h-4 w-4 animate-spin text-accent" strokeWidth={1.75} />
+          Saving your report.
+        </div>
       ) : (
-        <div className="space-y-3 text-sm text-slate-300">
-          <p>
-            Your report{ack.reportId ? <span className="font-mono text-xs text-faint"> ({ack.reportId})</span> : ''} has
-            been received. It can help future checks spot the same company, domain, email, phone, or payment clue.
+        <div>
+          <p className="font-medium text-slate-100">Report received.</p>
+          <p className="mt-2 leading-relaxed">
+            {ack.reviewStatus === 'indexed' ? 'I added it to the intelligence corpus' : 'I saved it for review'}
+            {ack.reportId ? <span className="font-mono text-xs text-faint"> ({ack.reportId})</span> : ''}.
+            Keep copies of the messages, links, payment requests, and contact details.
           </p>
-          <div className="surface-2 p-3">
-            <p className="mb-1.5 text-xs font-medium text-muted">Safety next steps</p>
-            <ul className="space-y-1 text-xs text-faint">
-              <li>Do not send money, gift cards, crypto, ID documents, or banking details.</li>
-              <li>If you already paid, contact your bank or card provider now.</li>
-              <li>Keep messages, receipts, numbers, links, and file names before blocking.</li>
-            </ul>
-          </div>
-          <button type="button" onClick={onAlsoCheck} className="btn-ghost text-sm">
-            Also check this for me
-          </button>
         </div>
       )}
-    </IntelCard>
+    </div>
   );
 }
 
@@ -420,9 +498,14 @@ type TimelineItem =
   | { type: 'report'; ack: ReportAck; createdAt: number };
 
 export function Workspace() {
-  const { entries, result, runAnalysis, recordReport, newCase } = useCase();
+  const { entries, result, lastEvidence, loading, runAnalysis, recordReport, newCase } = useCase();
+  const auth = useAuth();
   const [acks, setAcks] = useState<ReportAck[]>([]);
+  const [followUps, setFollowUps] = useState<ChatMessage[]>([]);
+  const [asking, setAsking] = useState(false);
   const reportAborts = useRef<Map<string, AbortController>>(new Map());
+  const chatAbort = useRef<AbortController | null>(null);
+  const chatInFlight = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const reduceMotion = useReducedMotion();
 
@@ -431,47 +514,89 @@ export function Workspace() {
     return () => {
       for (const controller of live.values()) controller.abort();
       live.clear();
+      chatAbort.current?.abort();
     };
   }, []);
 
   const handleVerify = useCallback(
-    (evidence: string) => {
-      void runAnalysis(evidence);
+    (evidence: string, files: ComposerEvidenceFile[]) => {
+      setFollowUps([]);
+      void (async () => {
+        const evidenceIds: string[] = [];
+        if (auth.authenticated) {
+          for (const item of files.slice(0, 8)) {
+            try {
+              const stored = await storeEvidence(item.file);
+              evidenceIds.push(stored.evidenceId);
+            } catch {
+              // Evidence retention is optional. A consent/storage failure must not block the check.
+            }
+          }
+        }
+        await runAnalysis(evidence, { evidenceIds });
+      })();
     },
-    [runAnalysis]
+    [auth.authenticated, runAnalysis]
   );
 
   const handleReport = useCallback(async (input: ReportInput) => {
     const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `r-${Date.now()}`;
     const controller = new AbortController();
+    const useCurrentCase =
+      input.evidence.trim().length < 80 &&
+      !!lastEvidence &&
+      input.emails.length === 0 &&
+      input.domains.length === 0 &&
+      input.phones.length === 0;
+    const evidence = useCurrentCase ? lastEvidence : input.evidence;
+    const company =
+      useCurrentCase && input.company === 'Unknown company' && result?.report.entities.companies[0]
+        ? result.report.entities.companies[0]
+        : input.company;
+    const emails = input.emails.length
+      ? input.emails
+      : useCurrentCase
+        ? result?.report.entities.emails.slice(0, 20) ?? []
+        : [];
+    const domains = input.domains.length
+      ? input.domains
+      : useCurrentCase
+        ? result?.report.entities.domains.slice(0, 20) ?? []
+        : [];
+    const phones = input.phones.length
+      ? input.phones
+      : useCurrentCase
+        ? result?.report.entities.phones.slice(0, 20) ?? []
+        : [];
     reportAborts.current.set(id, controller);
     setAcks((prev) => [
       ...prev,
       {
         id,
         kind: 'report',
-        company: input.company,
-        evidence: input.evidence,
+        company,
+        evidence,
         reportId: null,
+        reviewStatus: null,
         status: 'submitting',
         error: null,
         createdAt: Date.now(),
       },
     ]);
     try {
-      const { reportId } = await submitReport(
+      const { reportId, status } = await submitReport(
         {
-          companyName: input.company,
-          description: input.evidence,
+          companyName: company,
+          description: evidence,
           location: input.location || undefined,
-          emails: input.emails,
-          domains: input.domains,
-          phones: input.phones,
+          emails,
+          domains,
+          phones,
         },
         { signal: controller.signal }
       );
-      setAcks((prev) => prev.map((ack) => (ack.id === id ? { ...ack, status: 'done', reportId } : ack)));
-      recordReport({ company: input.company, evidence: input.evidence, reportId });
+      setAcks((prev) => prev.map((ack) => (ack.id === id ? { ...ack, status: 'done', reportId, reviewStatus: status } : ack)));
+      recordReport({ company, evidence, reportId });
     } catch (error) {
       if (controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : 'Could not file the report.';
@@ -479,7 +604,45 @@ export function Workspace() {
     } finally {
       reportAborts.current.delete(id);
     }
-  }, [recordReport]);
+  }, [lastEvidence, recordReport, result]);
+
+  const handleAsk = useCallback(
+    async (question: string) => {
+      if (!result || chatInFlight.current) return;
+      chatInFlight.current = true;
+      const controller = new AbortController();
+      chatAbort.current = controller;
+      const ctx: CaseContext = {
+        evidence: lastEvidence,
+        risk_level: result.report.risk_level,
+        risk_score: result.report.risk_score,
+        case_summary: result.report.case_summary,
+        red_flags: result.report.red_flags,
+        matches: result.matches.map((match) => ({
+          reportId: match.reportId,
+          scamType: match.scamType,
+          similarity: match.similarity,
+        })),
+      };
+      const next = [...followUps, { role: 'user' as const, content: question.trim() }];
+      setFollowUps(next);
+      setAsking(true);
+      try {
+        const { reply } = await chat(ctx, next, { signal: controller.signal });
+        setFollowUps([...next, { role: 'assistant' as const, content: reply }]);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setFollowUps([...next, { role: 'assistant' as const, content: detectiveFailure(error) }]);
+      } finally {
+        if (chatAbort.current === controller) {
+          chatAbort.current = null;
+          chatInFlight.current = false;
+          setAsking(false);
+        }
+      }
+    },
+    [followUps, lastEvidence, result]
+  );
 
   const reporting = useMemo(() => acks.some((ack) => ack.status === 'submitting'), [acks]);
   const timeline = useMemo<TimelineItem[]>(() => {
@@ -495,42 +658,48 @@ export function Workspace() {
     return done.length ? done[done.length - 1].id : null;
   }, [entries]);
 
-  useEffect(() => {
-    if (active && !reduceMotion) bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [active, reduceMotion, timeline.length]);
-
-  function startNew() {
+  const startNew = useCallback(() => {
     for (const controller of reportAborts.current.values()) controller.abort();
     reportAborts.current.clear();
+    chatAbort.current?.abort();
+    chatAbort.current = null;
+    chatInFlight.current = false;
     setAcks([]);
+    setFollowUps([]);
+    setAsking(false);
     newCase();
-  }
+  }, [newCase]);
+
+  useEffect(() => {
+    function handleNewCheck() {
+      startNew();
+    }
+    window.addEventListener('vmi:new-check', handleNewCheck);
+    return () => window.removeEventListener('vmi:new-check', handleNewCheck);
+  }, [startNew]);
+
+  useEffect(() => {
+    if (active && !reduceMotion) bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [active, asking, followUps.length, reduceMotion, timeline.length]);
 
   if (!active) {
     return (
       <div className="min-h-[calc(100vh-4rem)] bg-ink-900">
-        <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-3xl flex-col justify-center px-4 py-8 sm:px-6">
-          <header className="mb-6 text-center">
-            <p className="eyebrow">Investigation workspace</p>
-            <h1 className="mt-3 font-display text-3xl font-semibold leading-tight text-white sm:text-4xl">
-              What do you want to check?
+        <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-2xl flex-col justify-center px-4 py-8 sm:px-6">
+          <div className="mb-6 space-y-3 text-center">
+            <h1 className="font-display text-3xl font-semibold tracking-normal text-white sm:text-4xl">
+              Verify a job before you trust it
             </h1>
-            <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-muted sm:text-base">
-              Paste the whole situation, attach files, add a voice note, or report what happened. One evidence packet is
-              enough.
+            <p className="mx-auto max-w-xl text-sm leading-relaxed text-muted">
+              Paste the offer, recruiter message, link, screenshot, PDF, email, or voice evidence. We check the details and tell you what is safe to do next.
             </p>
-          </header>
-          <Composer onVerify={handleVerify} onReport={handleReport} reporting={reporting} />
-          <ul className="mt-5 flex flex-col items-center gap-x-6 gap-y-2.5 sm:flex-row sm:flex-wrap sm:justify-center">
-            {TRUST_MARKERS.map((marker) => {
-              const Icon = marker.icon;
-              return (
-                <li key={marker.label} className="flex items-center gap-2 text-xs text-faint">
-                  <Icon className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} /> {marker.label}
-                </li>
-              );
-            })}
-          </ul>
+            <div className="flex flex-wrap justify-center gap-x-4 gap-y-1 font-mono text-[11px] text-faint">
+              <span>One search</span>
+              <span>Evidence-backed</span>
+              <span>No forms</span>
+            </div>
+          </div>
+          <Composer onVerify={handleVerify} onReport={handleReport} analyzing={loading} reporting={reporting} />
         </div>
       </div>
     );
@@ -539,18 +708,10 @@ export function Workspace() {
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-ink-900">
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-3xl flex-col px-4 sm:px-6">
-        <div className="flex-1 py-6 sm:py-8">
-          <div className="mb-5 flex items-center justify-between gap-3">
-            <div>
-              <p className="eyebrow">Workspace</p>
-              <h1 className="mt-1 font-display text-xl font-semibold text-white">Current investigation</h1>
-            </div>
-            <button type="button" onClick={startNew} className="btn-ghost text-sm">
-              <Plus className="h-4 w-4" strokeWidth={1.75} /> New case
-            </button>
-          </div>
+        <div className="flex-1 py-4 sm:py-5">
+          <h1 className="sr-only">Current investigation</h1>
 
-          <div className="space-y-5">
+          <div className="space-y-4">
             {timeline.map((item) => (
               <motion.div
                 key={item.type === 'verify' ? item.entry.id : item.ack.id}
@@ -561,12 +722,12 @@ export function Workspace() {
                       animate: { opacity: 1, y: 0 },
                       transition: { duration: 0.22, ease: 'easeOut' as const },
                     })}
-                className="space-y-3"
+                className="space-y-2.5"
               >
                 {item.type === 'report' ? (
                   <>
                     <UserEvidencePacket evidence={item.ack.evidence} />
-                    <ReportAckCard ack={item.ack} onAlsoCheck={() => handleVerify(item.ack.evidence)} />
+                    <ReportAckCard ack={item.ack} />
                   </>
                 ) : (
                   <>
@@ -574,7 +735,7 @@ export function Workspace() {
                     {item.entry.status === 'running' ? (
                       <RunningCard />
                     ) : item.entry.status === 'error' ? (
-                      <div role="alert" className="surface flex items-start gap-3 border-risk-scam/40 p-5 text-sm text-risk-scam">
+                      <div role="alert" className="surface flex items-start gap-3 border-risk-scam/40 p-4 text-sm text-risk-scam">
                         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.75} />
                         <div>
                           <p className="font-medium">We could not complete this check.</p>
@@ -590,16 +751,25 @@ export function Workspace() {
             ))}
           </div>
 
-          {result && (
-            <div className="mt-6">
-              <ChatPanel />
+          {(followUps.length > 0 || asking) && (
+            <div className="mt-4">
+              <FollowUpMessages messages={followUps} loading={asking} />
             </div>
           )}
           <div ref={bottomRef} />
         </div>
 
-        <div className="sticky bottom-0 z-20 -mx-4 border-t border-line/70 bg-ink-900/95 px-4 py-4 backdrop-blur sm:-mx-6 sm:px-6">
-          <Composer onVerify={handleVerify} onReport={handleReport} reporting={reporting} docked />
+        <div className="sticky bottom-0 z-20 -mx-4 border-t border-line/70 bg-ink-900/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+          <Composer
+            onVerify={handleVerify}
+            onReport={handleReport}
+            onAsk={handleAsk}
+            reporting={reporting}
+            analyzing={loading}
+            asking={asking}
+            contextActive={!!result}
+            docked
+          />
         </div>
       </div>
     </div>

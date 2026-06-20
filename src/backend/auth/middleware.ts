@@ -14,11 +14,17 @@
 import crypto from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { Identity, AuthError, adminViaEmailAllowlist, authEnabled, isAdmin, verifyToken } from './identity';
-import { cosmosEnabled, consumeAnonTrial, recordUsage, upsertUser } from '../data/cosmos';
+import { cosmosEnabled, consumeAnonTrial, recordUsage, rollbackAnonTrial, upsertUser } from '../data/cosmos';
 import { logger } from '../observability/logger';
+
+type AnalyzeAccessReservation =
+  | { kind: 'open' }
+  | { kind: 'signed_in'; userId: string }
+  | { kind: 'anonymous'; key: string; reserved: boolean; durable: boolean };
 
 export interface AuthedRequest extends Request {
   identity?: Identity | null;
+  analyzeAccess?: AnalyzeAccessReservation;
 }
 
 function anonTrialMax(): number {
@@ -50,6 +56,12 @@ function consumeAnonTrialMemory(key: string, max: number): boolean {
   const next = (anonCounts.get(key) ?? 0) + 1;
   anonCounts.set(key, next);
   return next <= max;
+}
+
+function rollbackAnonTrialMemory(key: string): void {
+  const current = anonCounts.get(key) ?? 0;
+  if (current <= 1) anonCounts.delete(key);
+  else anonCounts.set(key, current - 1);
 }
 
 /**
@@ -101,14 +113,11 @@ export async function enforceAnalyzeAccess(
   res: Response,
   next: NextFunction
 ): Promise<void> {
+  req.analyzeAccess = { kind: 'open' };
   if (!authEnabled()) return next();
 
   if (req.identity) {
-    if (cosmosEnabled()) {
-      void recordUsage(req.identity.userId).catch((e) =>
-        logger.warn(`[Auth] usage meter failed: ${e instanceof Error ? e.message : e}`)
-      );
-    }
+    req.analyzeAccess = { kind: 'signed_in', userId: req.identity.userId };
     return next();
   }
 
@@ -119,21 +128,62 @@ export async function enforceAnalyzeAccess(
   }
   const key = anonKey(req.ip);
   let allowed: boolean;
+  let durable = false;
+  let reserved = false;
   try {
-    allowed = cosmosEnabled() ? await consumeAnonTrial(key, max) : consumeAnonTrialMemory(key, max);
+    durable = cosmosEnabled();
+    allowed = durable ? await consumeAnonTrial(key, max) : consumeAnonTrialMemory(key, max);
+    reserved = true;
   } catch (e) {
     // Fail open (still rate-limited): a storage hiccup must not lock visitors out.
     logger.warn(`[Auth] anon trial check failed, allowing: ${e instanceof Error ? e.message : e}`);
     allowed = true;
   }
   if (!allowed) {
+    if (reserved) {
+      try {
+        if (durable) await rollbackAnonTrial(key);
+        else rollbackAnonTrialMemory(key);
+      } catch (e) {
+        logger.warn(`[Auth] anon over-limit rollback failed: ${e instanceof Error ? e.message : e}`);
+      }
+    }
     res.status(401).json({
       error: 'You’ve used your free trial check. Sign in with Google or Apple to continue — it’s free.',
       code: 'trial_exhausted',
     });
     return;
   }
+  req.analyzeAccess = { kind: 'anonymous', key, reserved, durable };
   next();
+}
+
+/**
+ * Finalise analyze access after a SUCCESSFUL investigation. Anonymous trial
+ * reservations are already counted; signed-in usage is metered only now, so
+ * failed/aborted checks do not inflate usage history.
+ */
+export async function commitAnalyzeAccess(req: AuthedRequest): Promise<void> {
+  const access = req.analyzeAccess;
+  if (!access || access.kind !== 'signed_in' || !cosmosEnabled()) return;
+  try {
+    await recordUsage(access.userId);
+  } catch (e) {
+    logger.warn(`[Auth] usage meter failed: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+/** Release a reserved anonymous trial when /analyze fails before completion. */
+export async function rollbackAnalyzeAccess(req: AuthedRequest): Promise<void> {
+  const access = req.analyzeAccess;
+  if (!access || access.kind !== 'anonymous' || !access.reserved) return;
+  try {
+    if (access.durable) await rollbackAnonTrial(access.key);
+    else rollbackAnonTrialMemory(access.key);
+    req.analyzeAccess = { ...access, reserved: false };
+  } catch (e) {
+    logger.warn(`[Auth] anon trial rollback failed: ${e instanceof Error ? e.message : e}`);
+  }
 }
 
 /** Require a signed-in user (for account routes). 401 otherwise. */

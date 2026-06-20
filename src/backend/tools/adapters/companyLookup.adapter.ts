@@ -7,7 +7,7 @@ export async function companyLookupAdapter(input: {
   company_name?: string;
   registration_number?: string;
   country?: string;
-}): Promise<ToolResult> {
+}, signal?: AbortSignal): Promise<ToolResult> {
   const startTime = Date.now();
 
   try {
@@ -15,7 +15,7 @@ export async function companyLookupAdapter(input: {
       name: input.company_name,
       regNum: input.registration_number,
       country: input.country,
-    });
+    }, signal);
 
     if (result.error) {
       return {

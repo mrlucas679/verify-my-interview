@@ -32,22 +32,35 @@ function boundedText(value: string, maxLen: number): string {
   return value.replace(/\s+/g, ' ').trim().slice(0, maxLen);
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  throw reason instanceof Error ? reason : new Error('Investigation aborted');
+}
+
 export class InvestigatorAgent {
   constructor(
     private readonly runner: FoundryRunner | null,
     private readonly tools: ToolOrchestrator
   ) {}
 
-  async run(input: InvestigationInput, grounding?: GroundingPassage[]): Promise<InvestigatorResult> {
+  async run(
+    input: InvestigationInput,
+    grounding?: GroundingPassage[],
+    signal?: AbortSignal
+  ): Promise<InvestigatorResult> {
     // Deterministic gathering is the AUTHORITY: every relevant tool runs, so
     // coverage is complete regardless of any LLM. The scorer reads these results.
-    const base = await this.runDeterministic(input);
+    const base = await this.runDeterministic(input, signal);
+    throwIfAborted(signal);
     if (!this.runner) return base;
     // Foundry reasons over the gathered results (no tool-calling, JSON mode) to
     // produce a clearer write-up. Any failure falls back to the deterministic one.
     try {
-      return await this.runFoundryReasoning(input, base, grounding);
+      throwIfAborted(signal);
+      return await this.runFoundryReasoning(input, base, grounding, signal);
     } catch (error) {
+      throwIfAborted(signal);
       const fallback_reason = error instanceof Error ? error.message : String(error);
       logger.warn(`[Investigator] Foundry reasoning failed, using deterministic: ${fallback_reason}`);
       return { ...base, fallback_reason };
@@ -59,7 +72,8 @@ export class InvestigatorAgent {
   private async runFoundryReasoning(
     input: InvestigationInput,
     base: InvestigatorResult,
-    grounding?: GroundingPassage[]
+    grounding?: GroundingPassage[],
+    signal?: AbortSignal
   ): Promise<InvestigatorResult> {
     logger.info('[Investigator] Running Foundry reasoning over gathered evidence...');
     const { finalText } = await this.runner!.runTurn({
@@ -68,7 +82,7 @@ export class InvestigatorAgent {
       userMessage: this.reasoningMessage(input, base, grounding),
       responseFormat: 'json_object', // valid JSON object guaranteed — no free-text salvage
       // No tools: gathering already happened deterministically and completely.
-    });
+    }, signal);
 
     const parsed = extractJsonObject(finalText) ?? {};
     return {
@@ -143,7 +157,10 @@ export class InvestigatorAgent {
 
   // --- Deterministic gathering (the authority; also the fallback write-up) -----
 
-  private async runDeterministic(input: InvestigationInput): Promise<InvestigatorResult> {
+  private async runDeterministic(
+    input: InvestigationInput,
+    signal?: AbortSignal
+  ): Promise<InvestigatorResult> {
     logger.info('[Investigator] Running deterministic walk...');
     const toolsUsed: AgentToolCall[] = [];
     const signals: InvestigationSignals = emptySignals();
@@ -157,8 +174,10 @@ export class InvestigatorAgent {
     );
 
     if (entities.companyName) {
+      throwIfAborted(signal);
       const companyInput = { company_name: entities.companyName };
-      const result = await this.tools.execute('lookup_company_registry', companyInput);
+      const result = await this.tools.execute('lookup_company_registry', companyInput, signal);
+      throwIfAborted(signal);
       toolsUsed.push({ tool: 'lookup_company_registry', input: companyInput, result });
       if (result.success && result.data?.registered) {
         signals.positive_signals.push('Company registered in official registry');
@@ -173,12 +192,14 @@ export class InvestigatorAgent {
     }
 
     if (entities.domain) {
+      throwIfAborted(signal);
       const domainInput = {
         domain: entities.domain,
         email: entities.email,
         senderIp: input.senderIp,
       };
-      const result = await this.tools.execute('lookup_domain_rdap', domainInput);
+      const result = await this.tools.execute('lookup_domain_rdap', domainInput, signal);
+      throwIfAborted(signal);
       toolsUsed.push({ tool: 'lookup_domain_rdap', input: domainInput, result });
       if (result.success) {
         const age = result.data?.whois_data?.age_days;
@@ -201,8 +222,10 @@ export class InvestigatorAgent {
     }
 
     if (input.phone) {
+      throwIfAborted(signal);
       const phoneInput = { phone: input.phone, country: 'ZA' };
-      const result = await this.tools.execute('lookup_phone_intel', phoneInput);
+      const result = await this.tools.execute('lookup_phone_intel', phoneInput, signal);
+      throwIfAborted(signal);
       toolsUsed.push({ tool: 'lookup_phone_intel', input: phoneInput, result });
       if (result.success) {
         if (result.data?.is_voip) signals.red_flags.push('Recruiter number is a VOIP line');
@@ -218,8 +241,10 @@ export class InvestigatorAgent {
     }
 
     if (input.evidence) {
+      throwIfAborted(signal);
       const patternInput = { text: input.evidence };
-      const result = await this.tools.execute('detect_scam_patterns', patternInput);
+      const result = await this.tools.execute('detect_scam_patterns', patternInput, signal);
+      throwIfAborted(signal);
       toolsUsed.push({ tool: 'detect_scam_patterns', input: patternInput, result });
       if (result.success) {
         const score = result.data?.scam_score || 0;

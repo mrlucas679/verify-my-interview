@@ -12,6 +12,7 @@ import { logger } from '../observability/logger';
 // phone, web) are reused across requests within the TTL. The per-instance call
 // BUDGET below is deliberately NOT shared — each case keeps its own 10-call cap.
 const sharedCache = new Map<string, { result: ToolResult; timestamp: number }>();
+const sharedInFlight = new Map<string, Promise<ToolResult>>();
 
 export class ToolOrchestrator {
   private cache = sharedCache;
@@ -45,29 +46,50 @@ export class ToolOrchestrator {
       logger.debug(`[Tool] Cache hit: ${toolName}`);
       return { ...cached.result, cached: true };
     }
+    const inFlight = sharedInFlight.get(cacheKey);
+    if (inFlight) {
+      logger.debug(`[Tool] Joining in-flight call: ${toolName}`);
+      return { ...(await inFlight), cached: true };
+    }
 
     // Execute tool
     logger.info(`[Tool] Calling ${toolName} (${this.callCount + 1}/${this.maxCalls})`);
     this.callCount++;
-    let result: ToolResult;
+    const work = this.executeUncached(toolName, input, signal).finally(() => {
+      sharedInFlight.delete(cacheKey);
+    });
+    sharedInFlight.set(cacheKey, work);
+    const result = await work;
 
+    // Cache result if successful
+    if (result.success) {
+      this.evictExpiredCache();
+      this.evictOldestCacheEntry();
+      this.cache.set(cacheKey, { result, timestamp: Date.now() });
+    }
+
+    return result;
+  }
+
+  private async executeUncached(toolName: string, input: any, signal?: AbortSignal): Promise<ToolResult> {
     try {
       if (signal?.aborted) throw new Error('Tool call aborted before provider request');
+      let result: ToolResult;
       switch (toolName) {
         case 'lookup_company_registry':
-          result = await companyLookupAdapter(input);
+          result = await companyLookupAdapter(input, signal);
           break;
         case 'lookup_domain_rdap':
-          result = await domainLookupAdapter(input);
+          result = await domainLookupAdapter(input, signal);
           break;
         case 'detect_scam_patterns':
           result = await scamPatternDetectorAdapter(input);
           break;
         case 'research_company_web':
-          result = await webResearchAdapter(input);
+          result = await webResearchAdapter(input, signal);
           break;
         case 'lookup_phone_intel':
-          result = await phoneIntelAdapter(input);
+          result = await phoneIntelAdapter(input, signal);
           break;
         default:
           result = {
@@ -83,22 +105,14 @@ export class ToolOrchestrator {
           error: 'Tool call aborted after provider request',
         };
       }
+      return result;
     } catch (error) {
-      result = {
+      return {
         tool: toolName,
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
-
-    // Cache result if successful
-    if (result.success) {
-      this.evictExpiredCache();
-      this.evictOldestCacheEntry();
-      this.cache.set(cacheKey, { result, timestamp: Date.now() });
-    }
-
-    return result;
   }
 
   getCallCount(): number {
@@ -111,11 +125,13 @@ export class ToolOrchestrator {
 
   reset(): void {
     this.cache.clear();
+    sharedInFlight.clear();
     this.callCount = 0;
   }
 
   clearCache(): void {
     this.cache.clear();
+    sharedInFlight.clear();
   }
 
   private evictExpiredCache(): void {

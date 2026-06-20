@@ -5,7 +5,7 @@ export async function webResearchAdapter(input: {
   company?: string;
   role?: string;
   domain?: string;
-}): Promise<ToolResult> {
+}, signal?: AbortSignal): Promise<ToolResult> {
   const start = Date.now();
   if (!input.company) {
     return { tool: 'research_company_web', success: false, error: 'company is required', duration: Date.now() - start };
@@ -19,7 +19,7 @@ export async function webResearchAdapter(input: {
     };
   }
   try {
-    const r = await researchCompany(input.company, input.role, input.domain);
+    const r = await researchCompany(input.company, input.role, input.domain, signal);
     return {
       tool: 'research_company_web',
       success: true,

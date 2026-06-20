@@ -23,15 +23,22 @@ import * as mongodb from 'mongodb';
 import {
   consumeAnonTrial,
   cosmosEnabled,
+  deletePendingReport,
   deleteReport,
   deleteUserData,
   getCase,
+  getGraphRevision,
+  getPendingReport,
   getSharedReport,
   getUsage,
+  listPendingReports,
   listReports,
   recordUsage,
+  rollbackAnonTrial,
+  savePendingReport,
   saveReport,
   saveSharedReport,
+  touchGraphRevision,
   upsertUser,
 } from '../../src/backend/data/cosmos';
 import type { NetworkReport } from '../../src/backend/network/types';
@@ -138,6 +145,34 @@ describe('reports corpus', () => {
     findResult = [{ reportId: 'R-1' }, { reportId: 'R-2' }];
     expect(await listReports()).toHaveLength(2);
   });
+
+  it('stores public reports in a pending moderation queue', async () => {
+    const report = { reportId: 'R-pending', companyName: 'Acme' } as unknown as NetworkReport;
+    await savePendingReport(report);
+    expect(coll.updateOne).toHaveBeenCalledWith(
+      { _id: 'R-pending' },
+      {
+        $set: {
+          ...report,
+          status: 'pending_review',
+        },
+        $setOnInsert: expect.objectContaining({ _id: 'R-pending' }),
+      },
+      { upsert: true }
+    );
+  });
+
+  it('lists, fetches, and deletes pending reports', async () => {
+    findResult = [{ reportId: 'R-pending', status: 'pending_review' }];
+    await expect(listPendingReports()).resolves.toHaveLength(1);
+
+    coll.findOne.mockResolvedValue({ reportId: 'R-pending' });
+    await expect(getPendingReport('R-pending')).resolves.toEqual({ reportId: 'R-pending' });
+
+    coll.deleteOne.mockResolvedValue({ deletedCount: 1 });
+    await expect(deletePendingReport('R-pending')).resolves.toBe(true);
+    expect(coll.deleteOne).toHaveBeenCalledWith({ _id: 'R-pending' });
+  });
 });
 
 describe('upsertUser', () => {
@@ -173,6 +208,28 @@ describe('consumeAnonTrial (threshold)', () => {
     expect(await consumeAnonTrial('ip-hash', 1)).toBe(true);
     coll.findOneAndUpdate.mockResolvedValue({ count: 2 });
     expect(await consumeAnonTrial('ip-hash', 1)).toBe(false);
+  });
+
+  it('rolls back a reserved anonymous trial', async () => {
+    await rollbackAnonTrial('ip-hash');
+    expect(coll.updateOne).toHaveBeenCalledWith(
+      { _id: 'ip-hash', count: { $gt: 0 } },
+      { $inc: { count: -1 } }
+    );
+  });
+});
+
+describe('graph revision marker', () => {
+  it('increments the graph revision after corpus mutations', async () => {
+    coll.findOneAndUpdate.mockResolvedValue({ rev: 4 });
+    await expect(touchGraphRevision('report.created')).resolves.toBe(4);
+    expect(coll.findOneAndUpdate.mock.calls[0][0]).toEqual({ _id: 'entity_graph' });
+    expect(coll.findOneAndUpdate.mock.calls[0][1].$inc).toEqual({ rev: 1 });
+  });
+
+  it('returns 0 before a graph revision exists', async () => {
+    coll.findOne.mockResolvedValue(null);
+    await expect(getGraphRevision()).resolves.toBe(0);
   });
 });
 

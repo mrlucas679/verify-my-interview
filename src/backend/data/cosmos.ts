@@ -17,11 +17,14 @@ import type { NetworkReport } from '../network/types';
 
 const SHARED_REPORTS = 'shared_reports';
 const REPORTS = 'reports';
+const PENDING_REPORTS = 'pending_reports';
 const USERS = 'users';
 const CASES = 'cases';
 const USAGE = 'usage';
 const ANON_TRIALS = 'anon_trials';
+const META = 'meta';
 const MAX_REPORTS = 2_000;
+const MAX_PENDING_REPORTS = 200;
 const MAX_RESULT_BYTES = 256 * 1024;
 const MAX_CASES = 500;
 const CONNECT_TIMEOUT_MS = 8_000;
@@ -163,12 +166,63 @@ interface ReportDoc extends NetworkReport {
   _id: string;
 }
 
+export interface PendingReportDoc extends NetworkReport {
+  _id: string;
+  status: 'pending_review';
+  submittedAt: string;
+}
+
 /** Persist (upsert) a community scam report as the durable system of record. */
 export async function saveReport(report: NetworkReport): Promise<void> {
   const db = await getDb();
   await db
     .collection<ReportDoc>(REPORTS)
     .updateOne({ _id: report.reportId }, { $set: report }, { upsert: true });
+}
+
+/** Persist a public report awaiting moderator review. Not part of the graph. */
+export async function savePendingReport(report: NetworkReport): Promise<void> {
+  const db = await getDb();
+  const submittedAt = new Date().toISOString();
+  await db.collection<PendingReportDoc>(PENDING_REPORTS).updateOne(
+    { _id: report.reportId },
+    {
+      $set: {
+        ...report,
+        status: 'pending_review',
+      },
+      $setOnInsert: { _id: report.reportId, submittedAt },
+    },
+    { upsert: true }
+  );
+}
+
+/** List public reports waiting for admin review. */
+export async function listPendingReports(limit = MAX_PENDING_REPORTS): Promise<PendingReportDoc[]> {
+  const db = await getDb();
+  return db
+    .collection<PendingReportDoc>(PENDING_REPORTS)
+    .find({})
+    .sort({ submittedAt: 1 })
+    .limit(Math.max(1, Math.min(MAX_PENDING_REPORTS, Math.floor(limit))))
+    .toArray();
+}
+
+/** Fetch one pending public report for moderation. */
+export async function getPendingReport(reportId: string): Promise<PendingReportDoc | null> {
+  const id = typeof reportId === 'string' ? reportId.slice(0, 80) : '';
+  if (!id) return null;
+  const db = await getDb();
+  return db.collection<PendingReportDoc>(PENDING_REPORTS).findOne({ _id: id });
+}
+
+/** Remove a report from the pending-review queue. */
+export async function deletePendingReport(reportId: string): Promise<boolean> {
+  const id = typeof reportId === 'string' ? reportId.slice(0, 80) : '';
+  if (!id) return false;
+  const db = await getDb();
+  const res = await db.collection<PendingReportDoc>(PENDING_REPORTS).deleteOne({ _id: id });
+  return res.deletedCount > 0;
 }
 
 /**
@@ -227,6 +281,8 @@ export interface CaseDoc {
   evidenceType?: string;
   /** Blob paths of consented evidence files for this case (never raw text). */
   evidenceIds: string[];
+  /** Redacted derived result snapshot; no raw evidence. */
+  result?: unknown;
 }
 
 /** Create or update a user's profile from a verified identity. Free plan only. */
@@ -273,6 +329,7 @@ export async function saveCase(c: {
   caseSummary: string;
   evidenceType?: string;
   evidenceIds?: string[];
+  result?: unknown;
 }): Promise<void> {
   const db = await getPiiDb();
   const now = new Date();
@@ -288,6 +345,7 @@ export async function saveCase(c: {
         caseSummary: c.caseSummary.slice(0, 2_000),
         evidenceType: c.evidenceType?.slice(0, 40),
         evidenceIds: (c.evidenceIds ?? []).slice(0, 20),
+        result: c.result,
       },
     },
     { upsert: true }
@@ -298,7 +356,7 @@ export async function listCases(userId: string): Promise<CaseDoc[]> {
   const db = await getPiiDb();
   return db
     .collection<CaseDoc>(CASES)
-    .find({ userId })
+    .find({ userId }, { projection: { result: 0 } })
     .sort({ createdAtDate: -1 })
     .limit(MAX_CASES)
     .toArray();
@@ -317,12 +375,18 @@ export async function getCase(userId: string, caseId: string): Promise<CaseDoc |
  */
 export async function deleteUserData(userId: string): Promise<{ evidenceIds: string[] }> {
   const db = await getPiiDb();
-  const cases = await db
+  const cursor = db
     .collection<CaseDoc>(CASES)
-    .find({ userId }, { projection: { evidenceIds: 1 } })
-    .limit(MAX_CASES)
-    .toArray();
-  const evidenceIds = cases.flatMap((c) => c.evidenceIds ?? []);
+    .find({ userId }, { projection: { evidenceIds: 1 } });
+  const evidenceIds: string[] = [];
+  if (Symbol.asyncIterator in Object(cursor)) {
+    for await (const c of cursor as AsyncIterable<Pick<CaseDoc, 'evidenceIds'>>) {
+      evidenceIds.push(...(c.evidenceIds ?? []));
+    }
+  } else {
+    const cases = await cursor.toArray();
+    evidenceIds.push(...cases.flatMap((c) => c.evidenceIds ?? []));
+  }
   await db.collection<CaseDoc>(CASES).deleteMany({ userId });
   await db.collection(USAGE).deleteMany({ userId });
   await db.collection<UserDoc>(USERS).deleteOne({ _id: userId });
@@ -372,9 +436,17 @@ interface AnonTrialDoc {
   createdAtDate: Date;
 }
 
+interface MetaDoc {
+  _id: string;
+  rev?: number;
+  updatedAt?: string;
+  reason?: string;
+}
+
 /**
- * Consume one anonymous trial for a hashed key. Returns true if the caller may
+ * Reserve one anonymous trial for a hashed key. Returns true if the caller may
  * proceed (was under maxTrials), false once the free trial(s) are exhausted.
+ * Call rollbackAnonTrial when the request fails before a completed analysis.
  * Best-effort: a Cosmos hiccup fails OPEN (allows the check) rather than locking
  * a legitimate visitor out — abuse is still bounded by the per-IP rate limiter.
  */
@@ -387,4 +459,41 @@ export async function consumeAnonTrial(key: string, maxTrials: number): Promise<
   );
   const count = (res as AnonTrialDoc | null)?.count ?? 1;
   return count <= maxTrials;
+}
+
+/** Release a reserved anonymous trial after a failed/aborted analysis. */
+export async function rollbackAnonTrial(key: string): Promise<void> {
+  const db = await getDb();
+  await db.collection<AnonTrialDoc>(ANON_TRIALS).updateOne(
+    { _id: key, count: { $gt: 0 } },
+    { $inc: { count: -1 } }
+  );
+}
+
+// ── Cross-replica graph freshness marker ────────────────────────────────────
+
+const ENTITY_GRAPH_META_ID = 'entity_graph';
+
+/** Increment the durable graph revision after report corpus changes. */
+export async function touchGraphRevision(reason: string): Promise<number> {
+  const db = await getDb();
+  const res = await db.collection<MetaDoc>(META).findOneAndUpdate(
+    { _id: ENTITY_GRAPH_META_ID },
+    {
+      $inc: { rev: 1 },
+      $set: {
+        updatedAt: new Date().toISOString(),
+        reason: reason.slice(0, 80),
+      },
+    },
+    { upsert: true, returnDocument: 'after' }
+  );
+  return (res as MetaDoc | null)?.rev ?? 1;
+}
+
+/** Read the latest durable graph revision, or 0 before the first mutation. */
+export async function getGraphRevision(): Promise<number> {
+  const db = await getDb();
+  const doc = await db.collection<MetaDoc>(META).findOne({ _id: ENTITY_GRAPH_META_ID });
+  return doc?.rev ?? 0;
 }

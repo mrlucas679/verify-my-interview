@@ -13,7 +13,7 @@ import { phoneIntelligence, phoneIntelEnabled } from '../../verification/provide
 export async function phoneIntelAdapter(input: {
   phone: string;
   country?: string;
-}): Promise<ToolResult> {
+}, signal?: AbortSignal): Promise<ToolResult> {
   const startTime = Date.now();
 
   if (!phoneIntelEnabled()) {
@@ -26,7 +26,7 @@ export async function phoneIntelAdapter(input: {
   }
 
   try {
-    const intel = await phoneIntelligence(input.phone, input.country || 'ZA');
+    const intel = await phoneIntelligence(input.phone, input.country || 'ZA', signal);
     if (!intel) {
       return {
         tool: 'lookup_phone_intel',
