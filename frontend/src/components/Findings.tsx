@@ -6,7 +6,7 @@ import { proofSourceLabel } from '../lib/communication';
 export function Findings({ signals }: { signals: StructuredSignal[] }) {
   if (!signals.length) {
     return (
-      <p className="surface-2 p-4 text-sm text-faint">
+      <p className="rounded-md border border-line/70 bg-ink-900/60 p-3 text-sm text-faint">
         There was not enough detail to support a clear finding. Add the sender address,
         company name, link, phone number, or payment request so the investigation has
         something concrete to check.
@@ -26,7 +26,7 @@ export function Findings({ signals }: { signals: StructuredSignal[] }) {
             initial={{ opacity: 0, x: -8 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: i * 0.05 }}
-            className="surface-2 flex items-start gap-3 p-3.5"
+            className="flex items-start gap-3 rounded-md border border-line/70 bg-ink-900/60 p-2.5"
             style={{ borderLeft: `2px solid ${color}` }}
           >
             <div className="min-w-0 flex-1">

@@ -60,6 +60,24 @@ export interface AnalysisResult {
   multiPass: MultiPassResult;
 }
 
+export interface AnalysisOptions {
+  signal?: AbortSignal;
+}
+
+export class AnalysisAbortedError extends Error {
+  constructor(reason?: string) {
+    super(reason || 'Analysis aborted');
+    this.name = 'AnalysisAbortedError';
+  }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) throw reason;
+  throw new AnalysisAbortedError(typeof reason === 'string' ? reason : undefined);
+}
+
 /** Time a stage and wrap its result in a StageTrace. */
 async function staged<T>(
   stage: StageName,
@@ -69,10 +87,13 @@ async function staged<T>(
     summary: string;
     findings: Finding[];
     fallback_reason?: string;
-  }
+  },
+  signal?: AbortSignal
 ): Promise<{ result: T; trace: StageTrace }> {
+  throwIfAborted(signal);
   const started = Date.now();
   const result = await run();
+  throwIfAborted(signal);
   const { engine, summary, findings, fallback_reason } = describe(result);
   return {
     result,
@@ -146,15 +167,25 @@ function toolDisplayName(tool: string): string {
 }
 
 export class AgentOrchestrator {
-  static async analyze(evidence: string, caseId: string): Promise<AnalysisResult> {
+  static async analyze(
+    evidence: string,
+    caseId: string,
+    options: AnalysisOptions = {}
+  ): Promise<AnalysisResult> {
     return withTelemetrySpan('vmi.analysis', { 'vmi.case_id': caseId }, async (span) => {
-      const result = await AgentOrchestrator.analyzeInternal(evidence, caseId);
+      const result = await AgentOrchestrator.analyzeInternal(evidence, caseId, options);
       span.setAttributes(analysisResultAttributes(result));
       return result;
     });
   }
 
-  private static async analyzeInternal(evidence: string, caseId: string): Promise<AnalysisResult> {
+  private static async analyzeInternal(
+    evidence: string,
+    caseId: string,
+    options: AnalysisOptions
+  ): Promise<AnalysisResult> {
+    const { signal } = options;
+    throwIfAborted(signal);
     logger.info(`[Agent] Starting analysis for case ${caseId}`);
 
     const settings = getFoundrySettings();
@@ -170,14 +201,30 @@ export class AgentOrchestrator {
     const ev = await staged(
       'evidence',
       () => new EvidenceAgent().run(evidence),
-      (r) => ({ engine: r.engine, summary: r.summary, findings: r.findings })
+      (r) => ({ engine: r.engine, summary: r.summary, findings: r.findings }),
+      signal
     );
     stages.push(ev.trace);
     const entities = ev.result.entities;
+    throwIfAborted(signal);
 
     // Resolve shortened "apply here" links to their real destination so the
     // verification tools analyse the true domain (key-gated; no-op offline).
-    if (urlUnwrapEnabled()) await expandShortenedUrls(entities);
+    if (urlUnwrapEnabled()) await expandShortenedUrls(entities, signal);
+    throwIfAborted(signal);
+
+    // Foundry IQ grounding: retrieve passages from prior reported scams ONCE and
+    // share them across every reasoning stage (Investigator, Critic, Reporter),
+    // so the whole pipeline reasons against real precedent — not just the final
+    // write-up. Only the Foundry passes consume grounding, so skip the network
+    // call entirely when running deterministically. Key-gated + never throws.
+    const grounding =
+      runner && knowledgeBaseEnabled()
+        ? await retrieveGrounding(
+            [entities.companies[0], entities.domains[0], evidence].filter(Boolean).join(' ')
+          )
+        : [];
+    throwIfAborted(signal);
 
     // 2. VERIFICATION — evidence gathering is always deterministic, so every
     // relevant identifier check runs and coverage is complete by construction.
@@ -194,7 +241,7 @@ export class AgentOrchestrator {
     };
     const ver = await staged(
       'verification',
-      () => investigator.run(input),
+      () => investigator.run(input, grounding, signal),
       (r) => ({
         engine: r.engine,
         fallback_reason: r.fallback_reason,
@@ -209,7 +256,8 @@ export class AgentOrchestrator {
             confidence: 0.85,
             source: t.tool,
           })),
-      })
+      }),
+      signal
     );
     stages.push(ver.trace);
     const investigation = ver.result;
@@ -224,13 +272,15 @@ export class AgentOrchestrator {
     const [res, net] = await Promise.all([
       staged(
         'research',
-        () => new ResearchAgent(tools).run(entities, toolsUsed),
-        (r) => ({ engine: r.engine, summary: r.summary, findings: r.findings })
+        () => new ResearchAgent(tools).run(entities, toolsUsed, signal),
+        (r) => ({ engine: r.engine, summary: r.summary, findings: r.findings }),
+        signal
       ),
       staged(
         'network',
-        () => networkAgent.run(evidence, entities),
-        (r) => ({ engine: r.engine, summary: r.summary, findings: r.findings })
+        () => networkAgent.run(evidence, entities, signal),
+        (r) => ({ engine: r.engine, summary: r.summary, findings: r.findings }),
+        signal
       ),
     ]);
     stages.push(res.trace);
@@ -246,7 +296,7 @@ export class AgentOrchestrator {
     // 5. CRITIC — strike any claim no tool evidence supports.
     const crit = await staged(
       'critic',
-      () => new VerifierAgent(runner).run(evidence, investigation),
+      () => new VerifierAgent(runner).run(evidence, investigation, grounding, signal),
       (r) => ({
         engine: r.engine,
         fallback_reason: r.fallback_reason,
@@ -259,7 +309,8 @@ export class AgentOrchestrator {
           confidence: 0.8,
           source: 'critic',
         })),
-      })
+      }),
+      signal
     );
     stages.push(crit.trace);
     const verified = crit.result;
@@ -293,30 +344,31 @@ export class AgentOrchestrator {
           ? scored.level
           : calibratedLevel;
 
-    const redFlags = signals.filter((s) => s.category === 'red').map((s) => s.label);
+    const redSignals = signals.filter((s) => s.category === 'red');
+    const redFlags = redSignals.map((s) => s.label);
+    const userFacingRedFlags =
+      level === 'Low Risk'
+        ? []
+        : redFlags;
     const positives = signals.filter((s) => s.category === 'positive').map((s) => s.label);
     const verifiedFacts = signals
       .filter((s) => s.category === 'positive' && s.evidence.source !== 'text')
       .map((s) => s.evidence.detail);
 
-    // 6. REPORT — user-facing narrative composed from the vetted evidence.
-    // Foundry IQ grounding: pull passages from prior reported scams so the
-    // narrative can reference precedent (key-gated; no-op + [] when unconfigured).
-    const grounding = knowledgeBaseEnabled()
-      ? await retrieveGrounding([entities.companies[0], ...redFlags.slice(0, 4)].filter(Boolean).join('. '))
-      : [];
+    // 6. REPORT — user-facing narrative composed from the vetted evidence. Reuses
+    // the grounding retrieved up front (shared with the Investigator and Critic).
     const reporter = new ReporterAgent(runner);
     const rep = await staged(
       'report',
       () =>
         reporter.run({
-          signals: { verified_facts: verifiedFacts, red_flags: redFlags, positive_signals: positives },
+          signals: { verified_facts: verifiedFacts, red_flags: userFacingRedFlags, positive_signals: positives },
           riskLevel: level,
           riskScore: scored.score,
           entities,
           evidenceType: ev.result.evidenceType,
           grounding,
-        }),
+        }, signal),
       (r) => ({
         engine: r.engine,
         fallback_reason: r.fallback_reason,
@@ -327,7 +379,8 @@ export class AgentOrchestrator {
           confidence,
           source: s.evidence.source,
         })),
-      })
+      }),
+      signal
     );
     stages.push(rep.trace);
     const narrative = rep.result;
@@ -339,7 +392,7 @@ export class AgentOrchestrator {
       case_summary: narrative.case_summary,
       entities,
       verified_facts: verifiedFacts,
-      red_flags: redFlags,
+      red_flags: userFacingRedFlags,
       positive_signals: positives,
       missing_evidence: missingEvidence,
       recommended_next_steps: narrative.recommended_next_steps,

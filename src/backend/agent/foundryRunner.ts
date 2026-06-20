@@ -72,10 +72,16 @@ function turnDeadlineMs(): number {
 
 async function withDeadline<T>(
   workFactory: (signal: AbortSignal) => Promise<T>,
-  label: string
+  label: string,
+  externalSignal?: AbortSignal
 ): Promise<T> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | null = null;
+  const onExternalAbort = () => {
+    if (externalSignal) controller.abort(abortError(externalSignal, 'Foundry operation aborted'));
+  };
+  if (externalSignal?.aborted) onExternalAbort();
+  else externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
   const work = workFactory(controller.signal);
   const deadline = new Promise<T>((_, reject) => {
     timer = setTimeout(() => {
@@ -90,6 +96,7 @@ async function withDeadline<T>(
     return await Promise.race([work, deadline]);
   } finally {
     if (timer) clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
     void work.catch((error) => {
       console.warn(
         `[FoundryRunner] Late completion after deadline for ${label}: ${
@@ -175,11 +182,11 @@ export class FoundryRunner {
   }
 
   /** Run a single agent turn end-to-end and return its final message + tool calls. */
-  async runTurn(options: AgentTurnOptions): Promise<AgentTurnResult> {
+  async runTurn(options: AgentTurnOptions, signal?: AbortSignal): Promise<AgentTurnResult> {
     let lastError: Error | null = null;
     for (let attempt = 1; attempt <= MAX_TURN_ATTEMPTS; attempt++) {
       try {
-        return await withDeadline((signal) => this.runTurnOnce(options, signal), options.name);
+        return await withDeadline((turnSignal) => this.runTurnOnce(options, turnSignal), options.name, signal);
       } catch (error) {
         const captured = error instanceof Error ? error : new Error(String(error));
         lastError = captured;

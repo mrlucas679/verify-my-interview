@@ -13,7 +13,7 @@ export function embeddingsEnabled(): boolean {
 }
 
 /** Embed a single text into a vector using the Azure OpenAI embedding deployment. */
-export async function embed(text: string): Promise<number[]> {
+export async function embed(text: string, signal?: AbortSignal): Promise<number[]> {
   const deployment = process.env.AZURE_OPENAI_EMBED_DEPLOYMENT || 'text-embedding-3-small';
   const apiVersion = process.env.AZURE_OPENAI_API_VERSION || '2024-02-01';
   const url = `${base()}/openai/deployments/${deployment}/embeddings?api-version=${apiVersion}`;
@@ -22,6 +22,7 @@ export async function embed(text: string): Promise<number[]> {
     { input: text.slice(0, 8000) },
     {
       headers: { 'api-key': process.env.AZURE_OPENAI_KEY as string, 'Content-Type': 'application/json' },
+      signal,
       timeout: 20000,
     }
   );

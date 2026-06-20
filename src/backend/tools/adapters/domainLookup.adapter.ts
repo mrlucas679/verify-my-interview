@@ -15,7 +15,7 @@ export async function domainLookupAdapter(input: {
   domain: string;
   email?: string;
   senderIp?: string;
-}): Promise<ToolResult> {
+}, signal?: AbortSignal): Promise<ToolResult> {
   const startTime = Date.now();
 
   try {
@@ -23,7 +23,7 @@ export async function domainLookupAdapter(input: {
       domain: input.domain,
       email: input.email,
       senderIp: input.senderIp,
-    });
+    }, signal);
 
     if (result.error) {
       return {
@@ -56,6 +56,7 @@ export async function domainLookupAdapter(input: {
         // Email-reputation risk verdicts (null when unconfigured).
         address_risk: result.emailRep?.addressRisk ?? null,
         domain_risk: result.emailRep?.domainRisk ?? null,
+        mx_valid: result.emailRep?.isMxValid ?? null,
         dmarc_enforced: result.emailRep?.isDmarcEnforced ?? null,
         spf_strict: result.emailRep?.isSpfStrict ?? null,
         breaches: result.emailRep?.totalBreaches ?? null,

@@ -1,46 +1,58 @@
-import { Link, Outlet, useLocation } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { History, SquarePen } from 'lucide-react';
 import { Wordmark } from './Logo';
+import { useCase } from '../store/caseStore';
+import { AccountMenu } from './AccountMenu';
 
 export function Layout() {
-  const { pathname } = useLocation();
-  // The only nav action is "New check", and it only makes sense once the user
-  // has left the intake page (i.e. on the report).
-  const showNewCheck = pathname !== '/';
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { newCase } = useCase();
+  const newCheckActive = location.pathname === '/';
+
+  function startNewCheck() {
+    if (location.pathname === '/') {
+      window.dispatchEvent(new Event('vmi:new-check'));
+    } else {
+      newCase();
+    }
+    navigate('/');
+  }
+
+  const itemClass = (active: boolean) =>
+    `inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:text-sm ${
+      active ? 'bg-ink-800 text-white' : 'text-muted hover:bg-ink-850 hover:text-slate-200'
+    }`;
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-30 border-b border-line/70 bg-ink-900/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
-          <Link
+    <div className="min-h-screen bg-ink-900 text-slate-100">
+      <header className="sticky top-0 z-30 border-b border-line/70 bg-ink-900/90 backdrop-blur-xl">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
+          <NavLink
             to="/"
-            aria-label="Verify My Interview - new check"
+            aria-label="Verify My Interview workspace"
             className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
-            <Wordmark />
-          </Link>
-          {showNewCheck && (
-            <Link to="/" className="btn-ghost text-sm">
-              <Plus className="h-4 w-4" strokeWidth={1.75} /> New check
-            </Link>
-          )}
+            <Wordmark className="[&>span:last-child]:hidden sm:[&>span:last-child]:block" />
+          </NavLink>
+
+          <nav aria-label="Primary" className="flex items-center gap-1">
+            <button type="button" onClick={startNewCheck} className={itemClass(newCheckActive)}>
+              <SquarePen className="h-3.5 w-3.5" strokeWidth={1.75} />
+              New check
+            </button>
+            <NavLink to="/history" className={({ isActive }) => itemClass(isActive)}>
+              <History className="h-3.5 w-3.5" strokeWidth={1.75} />
+              History
+            </NavLink>
+            <AccountMenu />
+          </nav>
         </div>
       </header>
 
-      <main className="flex-1">
+      <main>
         <Outlet />
       </main>
-
-      <footer className="border-t border-line/70">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-7 text-xs text-faint sm:flex-row">
-          <Wordmark className="opacity-70" />
-          <p className="text-center">
-            VerifyMyInterview checks job offers for scam signals before you reply. This is
-            guidance, not financial or legal advice — always confirm through a company&rsquo;s
-            official channels before sending money or documents.
-          </p>
-        </div>
-      </footer>
     </div>
   );
 }

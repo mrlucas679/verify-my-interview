@@ -1,5 +1,5 @@
 // The investigation centerpiece: one vertically stacked layer per agent
-// (Evidence, Verification, Research, Network, Adjudication). Each layer reads
+// (Evidence, Verification, Research, Similar reports, Adjudication). Each layer reads
 // as ONE plain-English paragraph composed by `buildInvestigationLayers`, with a
 // connected timeline rail, a duration chip, the engine that ran it, and a
 // collapsed "Evidence detail" disclosure exposing the structured proof rows.
@@ -12,7 +12,6 @@ import {
   FileSearch,
   ShieldCheck,
   Globe,
-  Network,
   Gavel,
   Wrench,
   Check,
@@ -32,7 +31,7 @@ const LAYER_ICON: Record<LayerId, LucideIcon> = {
   evidence: FileSearch,
   verification: ShieldCheck,
   research: Globe,
-  network: Network,
+  network: FileSearch,
   adjudication: Gavel,
 };
 

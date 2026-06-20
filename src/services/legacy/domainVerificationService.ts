@@ -10,6 +10,9 @@ import {
   IpIntel,
 } from '../../backend/verification/providers';
 
+const PUBLIC_DNS_SERVERS = ['1.1.1.1', '8.8.8.8'];
+const MAX_DNS_RECORDS = 50;
+
 export interface DomainVerificationResult {
   dns?: { MX: string[]; A: string[]; AAAA: string[] };
   whois?: {
@@ -54,7 +57,10 @@ export class DomainVerificationService {
     this.disposableDomainSet = new Set(disposableDomains as string[]);
   }
 
-  async checkDomainHealth(input: string | DomainHealthInput): Promise<DomainVerificationResult> {
+  async checkDomainHealth(
+    input: string | DomainHealthInput,
+    signal?: AbortSignal
+  ): Promise<DomainVerificationResult> {
     const { domain, email, senderIp }: DomainHealthInput =
       typeof input === 'string' ? { domain: input } : input;
     const cacheKey = `${domain}|${email ?? ''}|${senderIp ?? ''}`;
@@ -71,10 +77,10 @@ export class DomainVerificationService {
       // every provider returns null when unconfigured, so this is safe offline.
       const [dnsRecords, whois, emailRep, company, ipIntel] = await Promise.all([
         this.checkDNS(domain),
-        whoisLookup(domain),
-        email ? emailReputation(email) : Promise.resolve(null),
-        companyEnrichment(domain),
-        senderIp ? ipIntelligence(senderIp) : Promise.resolve(null),
+        whoisLookup(domain, signal),
+        email ? emailReputation(email, signal) : Promise.resolve(null),
+        companyEnrichment(domain, signal),
+        senderIp ? ipIntelligence(senderIp, signal) : Promise.resolve(null),
       ]);
 
       result.dns = dnsRecords;
@@ -110,10 +116,12 @@ export class DomainVerificationService {
 
   private async checkDNS(domain: string): Promise<{ MX: string[]; A: string[]; AAAA: string[] }> {
     try {
+      const fallbackResolver = new dns.Resolver();
+      fallbackResolver.setServers(PUBLIC_DNS_SERVERS);
       const [mxRecords, aRecords, aaaaRecords] = await Promise.all([
-        dns.resolveMx(domain).catch(() => []),
-        dns.resolve4(domain).catch(() => []),
-        dns.resolve6(domain).catch(() => []),
+        this.resolveWithFallback(() => dns.resolveMx(domain), () => fallbackResolver.resolveMx(domain)),
+        this.resolveWithFallback(() => dns.resolve4(domain), () => fallbackResolver.resolve4(domain)),
+        this.resolveWithFallback(() => dns.resolve6(domain), () => fallbackResolver.resolve6(domain)),
       ]);
 
       return {
@@ -124,5 +132,12 @@ export class DomainVerificationService {
     } catch {
       return { MX: [], A: [], AAAA: [] };
     }
+  }
+
+  private async resolveWithFallback<T>(primary: () => Promise<T[]>, fallback: () => Promise<T[]>): Promise<T[]> {
+    const primaryRecords = await primary().catch((): T[] => []);
+    if (primaryRecords.length > 0) return primaryRecords.slice(0, MAX_DNS_RECORDS);
+    const fallbackRecords = await fallback().catch((): T[] => []);
+    return fallbackRecords.slice(0, MAX_DNS_RECORDS);
   }
 }

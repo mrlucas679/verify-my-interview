@@ -53,4 +53,17 @@ TalentBridge said the Amazon interview would happen over chat after a USDT activ
     expect(parsed.companies).not.toContain('Tuesday');
     expect(parsed.domains).toContain('careers.contoso.com');
   });
+
+  it('does not treat Google Jobs or LinkedIn source text as the employer', () => {
+    const parsed = EvidenceParser.parse(`TransUnion LLC
+Senior Investigator Consultant - Remote
+TransUnion LLC · Johannesburg · via Workday
+Apply on LinkedIn
+Source: LinkedIn/Google Jobs
+Recruiter email careers@transunion.com`);
+
+    expect(parsed.companies[0]).toBe('TransUnion');
+    expect(parsed.companies).not.toContain('Google');
+    expect(parsed.companies).not.toContain('LinkedIn');
+  });
 });

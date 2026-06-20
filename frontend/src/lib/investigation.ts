@@ -1,4 +1,4 @@
-// Composes the per-layer investigation prose for the Report page.
+// Composes the per-layer investigation prose for the workspace dossier.
 //
 // The backend emits a six-stage `PipelineTrace`; the Report collapses it into
 // FIVE reader-facing layers (Critic + Report fold into "Adjudication"). Each
@@ -49,8 +49,8 @@ const LAYER_META: Record<LayerId, { title: string; role: string }> = {
     role: 'Looks for public evidence that supports or contradicts the offer.',
   },
   network: {
-    title: 'Network',
-    role: 'Compares identifiers with earlier reports and known scam infrastructure.',
+    title: 'Similar reports',
+    role: 'Checks whether earlier reports used the same links, phones, emails, or payment clues.',
   },
   adjudication: {
     title: 'Verdict review',
@@ -128,7 +128,7 @@ function honestSkip(id: LayerId): string {
     case 'research':
       return 'No public-web research was needed for this case. The submitted evidence already carried enough checkable signals.';
     case 'network':
-      return 'None of this case’s identifiers matched earlier reports in the intelligence network.';
+      return 'None of this case’s identifiers matched earlier reports.';
     case 'verification':
       return 'No outside checks were run because the evidence did not include a company, domain, phone number, or contact address.';
     default:

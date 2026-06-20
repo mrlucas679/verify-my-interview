@@ -1,14 +1,15 @@
 // Stage 3 — Report-writer agent.
 //
 // Turns the verified signals + computed risk level into a clear, conservative,
-// user-facing narrative and concrete next steps. (Citations from a Foundry IQ
-// knowledge base are added in a later milestone.)
+// user-facing narrative and concrete next steps. When configured, Foundry IQ
+// grounding passages from prior reported scams are supplied so the narrative can
+// reference real precedent (the same grounding feeds the Investigator and Critic).
 
 import { FoundryRunner, extractJsonObject, asStringArray } from '../foundryRunner';
 import { Entities } from '../../../types/entities';
 import { RiskLevel } from '../../../types/report';
 import { EvidenceType, InvestigationSignals, ReporterResult } from '../types';
-import { GroundingPassage } from '../../network/knowledgeBase';
+import { GroundingPassage, groundingPromptLines } from '../../network/knowledgeBase';
 import { logger } from '../../observability/logger';
 
 export interface ReporterInput {
@@ -24,12 +25,15 @@ export interface ReporterInput {
 export class ReporterAgent {
   constructor(private readonly runner: FoundryRunner | null) {}
 
-  async run(input: ReporterInput): Promise<ReporterResult> {
+  async run(input: ReporterInput, signal?: AbortSignal): Promise<ReporterResult> {
     let fallbackReason: string | undefined;
     if (this.runner) {
       try {
-        return await this.runFoundry(input);
+        return await this.runFoundry(input, signal);
       } catch (error) {
+        if (signal?.aborted) {
+          throw signal.reason instanceof Error ? signal.reason : new Error('Reporter aborted');
+        }
         fallbackReason = error instanceof Error ? error.message : String(error);
         logger.warn(
           `[Reporter] Foundry path failed, using deterministic: ${fallbackReason}`
@@ -42,24 +46,36 @@ export class ReporterAgent {
 
   // --- Foundry path -----------------------------------------------------------
 
-  private async runFoundry(input: ReporterInput): Promise<ReporterResult> {
+  private async runFoundry(input: ReporterInput, signal?: AbortSignal): Promise<ReporterResult> {
     logger.info('[Reporter] Running via Foundry...');
     const { finalText } = await this.runner!.runTurn({
       name: 'vmi-reporter',
       instructions: this.instructions(),
       userMessage: this.userMessage(input),
       responseFormat: 'json_object', // guaranteed valid JSON object — reliable parse
-    });
+    }, signal);
 
     const parsed = extractJsonObject(finalText) ?? {};
     const steps = asStringArray(parsed.recommended_next_steps);
+    const summary =
+      typeof parsed.case_summary === 'string' && parsed.case_summary.trim()
+        ? parsed.case_summary.trim()
+        : this.fallbackSummary(input);
+    const nextSteps = steps.length ? steps : this.fallbackSteps(input);
+    if (!this.narrativeIsSafe(input, summary, nextSteps)) {
+      logger.warn('[Reporter] Foundry narrative contradicted computed signals; using deterministic summary.');
+      return {
+        engine: 'deterministic',
+        fallback_reason: 'Foundry narrative failed safety validation',
+        case_summary: this.fallbackSummary(input),
+        recommended_next_steps: this.fallbackSteps(input),
+        citations: [],
+      };
+    }
     return {
       engine: 'foundry',
-      case_summary:
-        typeof parsed.case_summary === 'string' && parsed.case_summary.trim()
-          ? parsed.case_summary.trim()
-          : this.fallbackSummary(input),
-      recommended_next_steps: steps.length ? steps : this.fallbackSteps(input),
+      case_summary: summary,
+      recommended_next_steps: nextSteps,
       citations: [],
     };
   }
@@ -102,13 +118,7 @@ export class ReporterAgent {
         null,
         2
       ),
-      ...(input.grounding && input.grounding.length
-        ? [
-            '',
-            'PRIOR REPORTED SCAMS (grounding — reference only if clearly relevant):',
-            ...input.grounding.map((g) => `- ${g.content}`),
-          ]
-        : []),
+      ...groundingPromptLines(input.grounding),
     ].join('\n');
   }
 
@@ -153,6 +163,29 @@ export class ReporterAgent {
       default:
         return `${reportPrefix}There was not enough checkable evidence to assess this safely. Add the sender address, company name, link, phone number, or payment request and run the check again.`;
     }
+  }
+
+  private narrativeIsSafe(input: ReporterInput, summary: string, steps: string[]): boolean {
+    const text = `${summary}\n${steps.join('\n')}`.toLowerCase();
+    if (/\b(definitely|guaranteed|100%|certainly)\s+(safe|legitimate|real)\b/.test(text)) return false;
+    if (this.advisesUnsafeAction(text)) return false;
+
+    const hasConcerns = input.signals.red_flags.length > 0 || input.riskLevel !== 'Low Risk';
+    if (!hasConcerns) return true;
+
+    return !(
+      /\b(no\s+(?:risk|concern|warning)|safe\s+to\s+(?:proceed|continue|trust)|verified\s+legitimate|fully\s+verified)\b/.test(text) ||
+      /\bignore\s+(?:the\s+)?(?:warning|red\s+flag|concern)s?\b/.test(text)
+    );
+  }
+
+  private advisesUnsafeAction(text: string): boolean {
+    const unsafe = /\b(send|pay|transfer|share|provide|upload|forward)\b[^.\n]{0,60}\b(money|crypto|gift\s*cards?|bank(?:ing)?\s*details?|identity\s*documents?|id\s*documents?|otp|one[-\s]?time\s*(?:pin|code)|account\s*codes?)\b/gi;
+    for (const match of text.matchAll(unsafe)) {
+      const before = text.slice(Math.max(0, match.index - 24), match.index);
+      if (!/\b(do\s+not|don't|never|avoid|until|before|without)\b/.test(before)) return true;
+    }
+    return false;
   }
 
   private fallbackSteps(input: ReporterInput): string[] {

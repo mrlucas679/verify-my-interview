@@ -13,20 +13,71 @@ import { embed, embeddingsEnabled } from './embeddings';
 const SEARCH_TIMEOUT_MS = 10_000;
 const MAX_GRAPH_REPORTS = 5_000;
 
+const MULTI_PART_PUBLIC_SUFFIXES = new Set([
+  'co.za',
+  'org.za',
+  'ac.za',
+  'gov.za',
+  'co.uk',
+  'org.uk',
+  'ac.uk',
+  'com.au',
+  'net.au',
+  'org.au',
+  'co.nz',
+]);
+
 interface IndexedReport extends NetworkReport {
   id: string;
   descriptionVector?: number[];
 }
 
-function timeoutSignal(ms: number): AbortSignal {
+function timeoutSignal(ms: number, parent?: AbortSignal): AbortSignal {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error(`Search operation exceeded ${ms}ms`)), ms);
   timer.unref?.();
+  if (parent?.aborted) {
+    controller.abort(parent.reason instanceof Error ? parent.reason : new Error('Search operation aborted'));
+  } else {
+    parent?.addEventListener(
+      'abort',
+      () => controller.abort(parent.reason instanceof Error ? parent.reason : new Error('Search operation aborted')),
+      { once: true }
+    );
+  }
   return controller.signal;
 }
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function canonicalDomain(raw: string): string {
+  const host = raw.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\.$/, '').split(/[/:?#]/)[0];
+  const labels = host.split('.').filter(Boolean);
+  if (labels.length <= 2) return host;
+  const suffix = labels.slice(-2).join('.');
+  if (MULTI_PART_PUBLIC_SUFFIXES.has(suffix) && labels.length >= 3) return labels.slice(-3).join('.');
+  return labels.slice(-2).join('.');
+}
+
+function normalizePaymentHandle(raw: string): string | null {
+  const value = raw.toLowerCase().trim().replace(/\s+/g, ' ');
+  const named = value.match(/\b(zelle|cash\s?app|venmo|paypal|interac)\b\s*[:\s]\s*(\$?[a-z0-9][\w.-]{3,})/i);
+  if (named) return `${named[1].replace(/\s+/g, '')}:${named[2].toLowerCase()}`;
+  const wallet = value.match(/\b(?:wallet|usdt|btc|eth|crypto)\b[^a-z0-9]{0,12}([a-z0-9][a-z0-9.:-]{7,})/i);
+  return wallet ? `wallet:${wallet[1].toLowerCase()}` : null;
+}
+
+function evidencePaymentHandles(text: string): Set<string> {
+  const handles = new Set<string>();
+  for (const m of text.matchAll(/\b(?:wallet|usdt|btc|eth|crypto)\b[^a-z0-9]{0,12}([a-z0-9][a-z0-9.:-]{7,})/gi)) {
+    handles.add(`wallet:${m[1].toLowerCase()}`);
+  }
+  for (const m of text.matchAll(/\b(zelle|cash\s?app|venmo|paypal|interac)\b\s*[:\s]\s*(\$?[a-z0-9][\w.-]{3,})/gi)) {
+    handles.add(`${m[1].toLowerCase().replace(/\s+/g, '')}:${m[2].toLowerCase()}`);
+  }
+  return handles;
 }
 
 export class ScamNetworkService {
@@ -128,6 +179,15 @@ export class ScamNetworkService {
     });
   }
 
+  async delete(reportId: string): Promise<boolean> {
+    if (!this.endpoint || !this.apiKey || !reportId.trim()) return false;
+    const client = this.searchClient();
+    await client.deleteDocuments([{ id: reportId.trim() } as IndexedReport], {
+      abortSignal: timeoutSignal(SEARCH_TIMEOUT_MS),
+    });
+    return true;
+  }
+
   async waitForReport(reportId: string, maxWaitMs = 2_500): Promise<boolean> {
     if (!this.enabled) return false;
     const client = this.searchClient();
@@ -188,10 +248,15 @@ export class ScamNetworkService {
     return reports;
   }
 
-  async search(evidence: string, entities: Entities, k = 4): Promise<NetworkMatch[]> {
+  async search(
+    evidence: string,
+    entities: Entities,
+    k = 4,
+    signal?: AbortSignal
+  ): Promise<NetworkMatch[]> {
     if (!this.enabled) return [];
     try {
-      const vector = await embed(this.queryText(evidence, entities));
+      const vector = await embed(this.queryText(evidence, entities), signal);
       const client = this.searchClient();
       const response = await client.search('*', {
         vectorSearchOptions: {
@@ -214,7 +279,7 @@ export class ScamNetworkService {
           'trustLevel',
         ],
         top: k,
-        abortSignal: timeoutSignal(SEARCH_TIMEOUT_MS),
+        abortSignal: timeoutSignal(SEARCH_TIMEOUT_MS, signal),
       } as any);
 
       const matches: NetworkMatch[] = [];
@@ -258,13 +323,8 @@ export class ScamNetworkService {
     const reasons: string[] = [];
     const text = evidence.toLowerCase();
 
-    const sharedDomain = e.domains.find((d) =>
-      doc.domains.some((dd) => {
-        const a = dd.toLowerCase();
-        const b = d.toLowerCase();
-        return a === b || a.includes(b) || b.includes(a);
-      })
-    );
+    const docDomains = new Set(doc.domains.map(canonicalDomain).filter(Boolean));
+    const sharedDomain = e.domains.find((d) => docDomains.has(canonicalDomain(d)));
     if (sharedDomain) reasons.push(`Shared / related domain: ${sharedDomain}`);
 
     const sharedEmail = e.emails.find((em) =>
@@ -290,21 +350,10 @@ export class ScamNetworkService {
       reasons.push(`Same impersonated brand: ${doc.companyName}`);
     }
 
-    const payTerms = [
-      'gift card',
-      'crypto',
-      'usdt',
-      'bitcoin',
-      'wire',
-      'zelle',
-      'cash app',
-      'western union',
-      'moneygram',
-      'voucher',
-    ];
-    const handles = doc.paymentHandles.join(' ').toLowerCase();
-    const sharedPay = payTerms.find((t) => text.includes(t) && handles.includes(t.split(' ')[0]));
-    if (sharedPay) reasons.push(`Same payment method: ${sharedPay}`);
+    const caseHandles = evidencePaymentHandles(text);
+    const docHandles = new Set(doc.paymentHandles.map(normalizePaymentHandle).filter((value): value is string => !!value));
+    const sharedPay = [...caseHandles].find((handle) => docHandles.has(handle));
+    if (sharedPay) reasons.push(`Same payment handle: ${sharedPay}`);
 
     if (reasons.length === 0) reasons.push('Semantically similar scam wording');
     return reasons;

@@ -2,27 +2,54 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
-import { AgentOrchestrator, AnalysisResult } from '../agent/orchestrator';
+import { AgentOrchestrator, AnalysisResult, PipelineTrace } from '../agent/orchestrator';
 import { CaseContext, ChatMessage, ConversationalAgent } from '../agent/agents/conversationalAgent';
 import { FoundryRunner, getFoundrySettings } from '../agent/foundryRunner';
 import { entityGraph } from '../network/entityGraph';
 import { scamNetwork } from '../network/scamNetwork';
 import { NetworkReport, NodeType, TrustLevel } from '../network/types';
+import { EntityGraph, GraphEdge, GraphNode, NetworkMatch } from '../network/types';
 import { extractText, ocrEnabled } from '../ocr/documentIntelligence';
 import { speechEnabled, transcribeAudio, TranscriptionError } from '../speech/speechToText';
 import { webResearchEnabled } from '../research/webResearch';
 import { redactAndCap, redactSensitiveIdentifiers } from '../privacy/redaction';
 import { ToolOrchestrator } from '../tools';
 import { ToolResult } from '../../types/tool_results';
+import { GuidanceCitation, RiskLevel, RiskReport, StructuredSignal } from '../../types/report';
 import { azureMonitorConfigured, azureMonitorStatus, initAzureMonitor } from '../observability/telemetry';
-import { cosmosEnabled, getSharedReport, saveReport, saveSharedReport } from '../data/cosmos';
+import {
+  cosmosEnabled,
+  deletePendingReport,
+  deleteReport,
+  deleteUserData,
+  getCase,
+  getPendingReport,
+  getSharedReport,
+  getUsage,
+  listCases,
+  listPendingReports,
+  saveCase,
+  savePendingReport,
+  saveReport,
+  saveSharedReport,
+  type PendingReportDoc,
+  type CaseDoc,
+  type UserDoc,
+} from '../data/cosmos';
+import { getUser, upsertUser } from '../data/cosmos';
+import { authEnabled } from '../auth/identity';
+import { blobEnabled, deleteEvidence, getEvidence, putEvidence } from '../storage/blob';
 import { publishEvent } from '../events/serviceBus';
-import { cleanString, cleanStringArray, sniffAudioType, sniffUploadType } from '../http/guard';
+import { cleanString, cleanStringArray, sanitizeHttpUrl, sniffAudioType, sniffUploadType } from '../http/guard';
 
 export const MAX_LOCAL_EVIDENCE_CHARS = 40_000;
 
 export interface LocalAnalyzeResponse extends AnalysisResult {
   case_id: string;
+}
+
+export interface LocalAnalyzeOptions {
+  signal?: AbortSignal;
 }
 
 export interface LocalChatResponse {
@@ -42,6 +69,8 @@ export interface HealthSnapshot {
     web_research: boolean;
     azure_monitor: boolean;
     shared_reports: boolean;
+    accounts: boolean;
+    evidence_storage: boolean;
   };
   observability: ReturnType<typeof azureMonitorStatus>;
 }
@@ -61,6 +90,18 @@ export interface LocalTranscriptionResponse {
 export interface LocalReportResponse {
   ok: true;
   reportId: string;
+  indexed: boolean;
+  status: 'pending_review' | 'indexed';
+}
+
+export interface PendingReportsResponse {
+  reports: PendingReportDoc[];
+}
+
+export interface ModerateReportResponse {
+  ok: true;
+  reportId: string;
+  action: 'approved' | 'rejected';
   indexed: boolean;
 }
 
@@ -97,6 +138,16 @@ const TRUST_LEVELS: ReadonlySet<string> = new Set<TrustLevel>([
   'corroborated',
   'trusted',
 ]);
+const RISK_LEVELS: ReadonlySet<string> = new Set<RiskLevel>([
+  'Low Risk',
+  'Needs More Verification',
+  'Suspicious',
+  'Likely Scam',
+  'Inconclusive',
+]);
+const ENGINE_MODES = new Set(['foundry', 'deterministic', 'mixed']);
+const MAX_LOCAL_PENDING_REPORTS = 200;
+const localPendingReports = new Map<string, PendingReportDoc>();
 
 const SNIFFED_AUDIO_MIME: Record<string, string> = {
   wav: 'audio/wav',
@@ -107,6 +158,196 @@ const SNIFFED_AUDIO_MIME: Record<string, string> = {
   webm: 'audio/webm',
   amr: 'audio/amr',
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function cleanRiskLevel(value: unknown): RiskLevel {
+  return typeof value === 'string' && RISK_LEVELS.has(value) ? (value as RiskLevel) : 'Inconclusive';
+}
+
+function cleanUnitNumber(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
+}
+
+function cleanScore(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : 0;
+}
+
+function cleanSignedPoints(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(-100, Math.min(100, Math.round(n))) : 0;
+}
+
+function cleanSharedText(value: unknown, max: number): string {
+  return redactAndCap(cleanString(value, max), max);
+}
+
+function cleanGuidance(value: unknown): GuidanceCitation[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 5).map((item) => {
+    const row = isRecord(item) ? item : {};
+    return {
+      title: cleanSharedText(row.title, 180),
+      source: cleanSharedText(row.source, 80),
+      url: sanitizeHttpUrl(row.url, 500),
+      excerpt: cleanSharedText(row.excerpt, 500),
+      matched_signals: cleanStringArray(row.matched_signals, 12, 160),
+    };
+  }).filter((item) => item.title && item.source && item.url);
+}
+
+function cleanRiskReport(value: unknown): RiskReport | null {
+  if (!isRecord(value)) return null;
+  const rawEntities = isRecord(value.entities) ? value.entities : {};
+  return {
+    risk_score: cleanScore(value.risk_score),
+    risk_level: cleanRiskLevel(value.risk_level),
+    confidence: cleanUnitNumber(value.confidence),
+    case_summary: cleanSharedText(value.case_summary, 1_500),
+    entities: {
+      companies: cleanStringArray(rawEntities.companies, 20, 120),
+      people: [],
+      emails: cleanStringArray(rawEntities.emails, 20, 254),
+      domains: cleanStringArray(rawEntities.domains, 20, 253),
+      urls: cleanStringArray(rawEntities.urls, 20, 500),
+      phones: cleanStringArray(rawEntities.phones, 20, 30),
+      money_requests: cleanStringArray(rawEntities.money_requests, 20, 160),
+      job_titles: cleanStringArray(rawEntities.job_titles, 20, 120),
+      reply_to: cleanString(rawEntities.reply_to, 254) || undefined,
+      sender_ip: cleanString(rawEntities.sender_ip, 64) || undefined,
+    },
+    verified_facts: cleanStringArray(value.verified_facts, 20, 500).map((item) => redactAndCap(item, 500)),
+    red_flags: cleanStringArray(value.red_flags, 20, 220).map((item) => redactAndCap(item, 220)),
+    positive_signals: cleanStringArray(value.positive_signals, 20, 220).map((item) => redactAndCap(item, 220)),
+    missing_evidence: cleanStringArray(value.missing_evidence, 20, 220).map((item) => redactAndCap(item, 220)),
+    recommended_next_steps: cleanStringArray(value.recommended_next_steps, 12, 280).map((item) => redactAndCap(item, 280)),
+    tool_results_used: cleanStringArray(value.tool_results_used, 20, 80),
+    guidance_citations: cleanGuidance(value.guidance_citations),
+  };
+}
+
+function cleanSignal(value: unknown): StructuredSignal | null {
+  if (!isRecord(value)) return null;
+  const category = value.category === 'positive' ? 'positive' : value.category === 'red' ? 'red' : null;
+  const evidence = isRecord(value.evidence) ? value.evidence : {};
+  const id = cleanString(value.id, 80);
+  const label = cleanSharedText(value.label, 220);
+  if (!id || !label || !category) return null;
+  return {
+    id,
+    label,
+    category,
+    points: cleanSignedPoints(value.points),
+    evidence: {
+      source: cleanString(evidence.source, 80),
+      detail: cleanSharedText(evidence.detail, 500),
+    },
+  };
+}
+
+function cleanNetworkMatch(value: unknown): NetworkMatch | null {
+  if (!isRecord(value)) return null;
+  const reportId = cleanString(value.reportId, 80);
+  if (!reportId) return null;
+  const trustLevel = typeof value.trustLevel === 'string' && TRUST_LEVELS.has(value.trustLevel)
+    ? (value.trustLevel as TrustLevel)
+    : undefined;
+  return {
+    reportId,
+    companyName: cleanSharedText(value.companyName, 120),
+    scamType: cleanSharedText(value.scamType, 120),
+    description: cleanSharedText(value.description, 800),
+    location: cleanSharedText(value.location, 120),
+    reportedAt: cleanString(value.reportedAt, 40),
+    similarity: cleanUnitNumber(value.similarity),
+    reasons: cleanStringArray(value.reasons, 8, 180).map((item) => redactAndCap(item, 180)),
+    trustLevel,
+  };
+}
+
+function cleanGraph(value: unknown): EntityGraph {
+  if (!isRecord(value)) return { nodes: [], edges: [], generatedAt: new Date().toISOString() };
+  const nodes = Array.isArray(value.nodes) ? value.nodes.slice(0, 120).map((item): GraphNode | null => {
+    if (!isRecord(item) || typeof item.type !== 'string' || !NODE_TYPES.has(item.type)) return null;
+    const trust = typeof item.trust === 'string' && TRUST_LEVELS.has(item.trust) ? (item.trust as TrustLevel) : undefined;
+    return {
+      id: cleanString(item.id, 180),
+      type: item.type as NodeType,
+      label: cleanSharedText(item.label, 180),
+      trust,
+      reportCount: cleanScore(item.reportCount),
+      firstSeen: cleanString(item.firstSeen, 40),
+      lastSeen: cleanString(item.lastSeen, 40),
+      scamType: cleanSharedText(item.scamType, 120) || undefined,
+    };
+  }).filter((item): item is GraphNode => !!item && !!item.id && !!item.label) : [];
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = Array.isArray(value.edges) ? value.edges.slice(0, 160).map((item): GraphEdge | null => {
+    if (!isRecord(item)) return null;
+    const source = cleanString(item.source, 180);
+    const target = cleanString(item.target, 180);
+    if (!nodeIds.has(source) || !nodeIds.has(target)) return null;
+    return {
+      source,
+      target,
+      type: cleanString(item.type, 40) as GraphEdge['type'],
+      weight: cleanScore(item.weight) || 1,
+    };
+  }).filter((item): item is GraphEdge => !!item) : [];
+  return { nodes, edges, generatedAt: cleanString(value.generatedAt, 40) || new Date().toISOString() };
+}
+
+function minimalTrace(value: unknown): PipelineTrace {
+  const raw = isRecord(value) ? value : {};
+  const mode = typeof raw.engine_mode === 'string' && ENGINE_MODES.has(raw.engine_mode)
+    ? (raw.engine_mode as PipelineTrace['engine_mode'])
+    : 'deterministic';
+  return {
+    engine_mode: mode,
+    coverage: cleanUnitNumber(raw.coverage),
+    stages: [],
+    tool_calls: [],
+    investigator_reasoning: '',
+    critique: '',
+    removed_claims: [],
+    degraded_stages: [],
+  };
+}
+
+export function sanitizeSharedAnalysisResult(result: unknown): LocalAnalyzeResponse | null {
+  if (!isRecord(result)) return null;
+  const report = cleanRiskReport(result.report);
+  if (!report) return null;
+  return {
+    case_id: cleanString(result.case_id, 96) || 'shared',
+    report,
+    trace: minimalTrace(result.trace),
+    signals: Array.isArray(result.signals) ? result.signals.map(cleanSignal).filter((item): item is StructuredSignal => !!item).slice(0, 40) : [],
+    matches: Array.isArray(result.matches) ? result.matches.map(cleanNetworkMatch).filter((item): item is NetworkMatch => !!item).slice(0, 20) : [],
+    graph: cleanGraph(result.graph),
+    multiPass: isRecord(result.multiPass)
+      ? {
+          status: result.multiPass.status === 'escalated' ? 'escalated' : 'single_pass_sufficient',
+          reason: cleanSharedText(result.multiPass.reason, 240),
+          outcome: cleanSharedText(result.multiPass.outcome, 80) as LocalAnalyzeResponse['multiPass']['outcome'],
+          agreement: result.multiPass.agreement === 'low' || result.multiPass.agreement === 'medium' ? result.multiPass.agreement : 'high',
+          uncertainty: cleanStringArray(result.multiPass.uncertainty, 8, 180).map((item) => redactAndCap(item, 180)),
+          reviews: [],
+        }
+      : {
+          status: 'single_pass_sufficient',
+          reason: '',
+          outcome: 'Insufficient Evidence',
+          agreement: 'medium',
+          uncertainty: [],
+          reviews: [],
+        },
+  };
+}
 
 function findProjectRoot(start: string): string | null {
   let dir = path.resolve(start);
@@ -133,7 +374,8 @@ initAzureMonitor();
 
 export async function analyzeEvidenceLocal(
   evidence: string,
-  caseId?: string
+  caseId?: string,
+  options: LocalAnalyzeOptions = {}
 ): Promise<LocalAnalyzeResponse> {
   if (typeof evidence !== 'string' || evidence.trim().length === 0) {
     throw new Error('evidence must be a non-empty string');
@@ -143,7 +385,7 @@ export async function analyzeEvidenceLocal(
   }
   const { text } = redactSensitiveIdentifiers(evidence);
   const id = caseId ?? randomUUID();
-  const result = await AgentOrchestrator.analyze(text, id);
+  const result = await AgentOrchestrator.analyze(text, id, options);
   return { case_id: id, ...result };
 }
 
@@ -240,17 +482,78 @@ export async function transcribeAudioLocal(
 
 function apiKeyMatches(candidate: string | undefined): boolean {
   const expected = process.env.VMI_REPORT_API_KEY;
-  if (!expected) return true;
+  if (!expected) {
+    return process.env.NODE_ENV !== 'production' || process.env.VMI_ALLOW_PUBLIC_REPORTS === '1';
+  }
   const got = Buffer.from(candidate ?? '');
   const want = Buffer.from(expected);
   return got.length === want.length && timingSafeEqual(got, want);
+}
+
+function reportApiKeyConfigured(): boolean {
+  return Boolean(process.env.VMI_REPORT_API_KEY);
+}
+
+function canAcceptPublicReport(): boolean {
+  return process.env.NODE_ENV !== 'production' || process.env.VMI_ALLOW_PUBLIC_REPORTS === '1';
+}
+
+function trustedReportSubmission(apiKey?: string): boolean {
+  return reportApiKeyConfigured() && apiKeyMatches(apiKey);
+}
+
+async function indexReviewedReport(report: NetworkReport): Promise<boolean> {
+  if (cosmosEnabled()) {
+    await saveReport(report);
+    await entityGraph.markDirty('report.approved');
+  }
+  if (scamNetwork.enabled) {
+    await scamNetwork.add(report);
+    const indexed = await scamNetwork.waitForReport(report.reportId);
+    await entityGraph.refresh();
+    return indexed;
+  }
+  await entityGraph.addLocalReport(report);
+  return true;
+}
+
+function toPendingReport(report: NetworkReport): PendingReportDoc {
+  return {
+    ...report,
+    _id: report.reportId,
+    status: 'pending_review',
+    submittedAt: new Date().toISOString(),
+  };
+}
+
+async function queuePendingReport(report: NetworkReport): Promise<void> {
+  if (cosmosEnabled()) {
+    await savePendingReport(report);
+    return;
+  }
+  if (localPendingReports.size >= MAX_LOCAL_PENDING_REPORTS) {
+    const oldest = localPendingReports.keys().next().value;
+    if (oldest) localPendingReports.delete(oldest);
+  }
+  localPendingReports.set(report.reportId, toPendingReport(report));
+}
+
+async function pendingReportById(reportId: string): Promise<PendingReportDoc | null> {
+  if (cosmosEnabled()) return getPendingReport(reportId);
+  return localPendingReports.get(reportId) ?? null;
+}
+
+async function removePendingReport(reportId: string): Promise<boolean> {
+  if (cosmosEnabled()) return deletePendingReport(reportId);
+  return localPendingReports.delete(reportId);
 }
 
 export async function submitReportLocal(
   input: unknown,
   apiKey?: string
 ): Promise<LocalReportResponse> {
-  if (!apiKeyMatches(apiKey)) {
+  const trustedSubmission = trustedReportSubmission(apiKey);
+  if (!trustedSubmission && !canAcceptPublicReport()) {
     throw new LocalHttpError(401, 'Invalid or missing API key');
   }
   if (!input || typeof input !== 'object') {
@@ -275,14 +578,24 @@ export async function submitReportLocal(
     location: cleanString(body.location, 120) || 'Unknown',
     reportedAt: new Date().toISOString().slice(0, 10),
     sourceType: 'user',
-    trustLevel: 'unverified',
+    trustLevel: trustedSubmission ? 'verified' : 'unverified',
   };
+  if (!trustedSubmission) {
+    await queuePendingReport(report);
+    void publishEvent('report.created', {
+      reportId: report.reportId,
+      companyName: report.companyName,
+      status: 'pending_review',
+    });
+    return { ok: true, reportId: report.reportId, indexed: false, status: 'pending_review' };
+  }
   let indexed = false;
   if (scamNetwork.enabled) {
     // Cosmos is the durable system of record; Search is the derived vector index.
     if (cosmosEnabled()) {
       try {
         await saveReport(report);
+        await entityGraph.markDirty('report.created');
       } catch {
         /* durable store is best-effort; the Search index still receives the report */
       }
@@ -297,7 +610,78 @@ export async function submitReportLocal(
   // Best-effort event for async consumers (reindex/recompute/notify). No-op when
   // Service Bus is unconfigured; never blocks or fails the submission.
   void publishEvent('report.created', { reportId: report.reportId, companyName: report.companyName });
-  return { ok: true, reportId: report.reportId, indexed };
+  return { ok: true, reportId: report.reportId, indexed, status: 'indexed' };
+}
+
+/** Admin moderation queue: list public reports awaiting review. */
+export async function listPendingReportsLocal(): Promise<PendingReportsResponse> {
+  if (cosmosEnabled()) return { reports: await listPendingReports() };
+  return { reports: [...localPendingReports.values()].slice(0, MAX_LOCAL_PENDING_REPORTS) };
+}
+
+/** Admin moderation: approve moves a pending report into the graph; reject drops it. */
+export async function moderateReportLocal(
+  reportId: string,
+  action: 'approve' | 'reject',
+  reviewerId?: string
+): Promise<ModerateReportResponse> {
+  const id = cleanString(reportId, 80);
+  if (!id) throw new LocalHttpError(400, 'A reportId is required');
+  const pending = await pendingReportById(id);
+  if (!pending) throw new LocalHttpError(404, 'Pending report not found');
+
+  if (action === 'reject') {
+    await removePendingReport(id);
+    void publishEvent('report.created', {
+      reportId: id,
+      status: 'rejected',
+      reviewerId: cleanString(reviewerId, 96),
+    });
+    return { ok: true, reportId: id, action: 'rejected', indexed: false };
+  }
+
+  const approved: NetworkReport = {
+    reportId: pending.reportId,
+    companyName: pending.companyName,
+    aliases: pending.aliases,
+    scamType: pending.scamType,
+    description: pending.description,
+    domains: pending.domains,
+    emails: pending.emails,
+    phones: pending.phones ?? [],
+    paymentHandles: pending.paymentHandles,
+    location: pending.location,
+    reportedAt: pending.reportedAt,
+    sourceType: pending.sourceType,
+    trustLevel: 'verified',
+  };
+  const indexed = await indexReviewedReport(approved);
+  await removePendingReport(id);
+  void publishEvent('report.created', {
+    reportId: id,
+    companyName: approved.companyName,
+    status: 'approved',
+    reviewerId: cleanString(reviewerId, 96),
+  });
+  return { ok: true, reportId: id, action: 'approved', indexed };
+}
+
+/**
+ * Admin moderation: remove a community report from the durable corpus and refresh
+ * the entity graph. AUTHORIZATION (admin role) is enforced at the HTTP boundary
+ * (requireAdmin) — this core assumes the caller is already authorized.
+ */
+export async function deleteReportLocal(reportId: string): Promise<{ ok: true; deleted: boolean }> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'The durable report store is not configured');
+  const id = cleanString(reportId, 80);
+  if (!id) throw new LocalHttpError(400, 'A reportId is required');
+  const deleted = await deleteReport(id);
+  await scamNetwork.delete(id).catch(() => false);
+  if (scamNetwork.enabled || cosmosEnabled()) {
+    if (deleted) await entityGraph.markDirty('report.deleted');
+    await entityGraph.refresh().catch(() => {});
+  }
+  return { ok: true, deleted };
 }
 
 export function healthSnapshot(): HealthSnapshot {
@@ -313,9 +697,142 @@ export function healthSnapshot(): HealthSnapshot {
       web_research: webResearchEnabled(),
       azure_monitor: azureMonitorConfigured(),
       shared_reports: cosmosEnabled(),
+      accounts: authEnabled(),
+      evidence_storage: blobEnabled(),
     },
     observability: azureMonitorStatus(),
   };
+}
+
+// ── Accounts, case history & evidence (signed-in users only) ─────────────────
+// All env-gated: with auth/Cosmos/Blob unconfigured these throw a clean 503 or
+// no-op, so the stateless anonymous flow is unchanged.
+
+const SNIFFED_UPLOAD_EXT: Record<string, string> = {
+  jpeg: 'jpg',
+  png: 'png',
+  pdf: 'pdf',
+  tiff: 'tif',
+  webp: 'webp',
+  bmp: 'bmp',
+  heic: 'heic',
+};
+
+export interface ProfileResponse {
+  user: { id: string; email?: string; name?: string; provider?: string; plan: 'free'; consent: UserDoc['consent'] };
+  usage: { period: string; count: number };
+}
+
+/** A user's profile + current-period usage. Requires accounts + Cosmos. */
+export async function getProfileLocal(userId: string): Promise<ProfileResponse> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'Accounts are not configured on this server');
+  const [user, usage] = await Promise.all([getUser(userId), getUsage(userId)]);
+  if (!user) throw new LocalHttpError(404, 'Account not found');
+  return {
+    user: {
+      id: user._id,
+      email: user.email,
+      name: user.name,
+      provider: user.provider,
+      plan: 'free',
+      consent: user.consent,
+    },
+    usage,
+  };
+}
+
+/** Persist a redacted case snapshot for a signed-in user. Best-effort. */
+export async function recordCaseLocal(
+  userId: string,
+  analysis: LocalAnalyzeResponse,
+  evidenceIds: string[] = []
+): Promise<void> {
+  if (!cosmosEnabled()) return;
+  const snapshot = sanitizeSharedAnalysisResult(analysis);
+  await saveCase({
+    id: analysis.case_id,
+    userId,
+    riskLevel: analysis.report.risk_level,
+    riskScore: analysis.report.risk_score,
+    caseSummary: analysis.report.case_summary,
+    evidenceIds,
+    result: snapshot ?? undefined,
+  });
+}
+
+export async function listCasesLocal(userId: string): Promise<CaseDoc[]> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'Accounts are not configured on this server');
+  return listCases(userId);
+}
+
+export async function getCaseLocal(userId: string, caseId: string): Promise<CaseDoc> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'Accounts are not configured on this server');
+  const found = await getCase(userId, typeof caseId === 'string' ? caseId : '');
+  if (!found) throw new LocalHttpError(404, 'Case not found');
+  return found;
+}
+
+/** Set a user's evidence-storage consent (POPIA explicit consent). */
+export async function setConsentLocal(
+  userId: string,
+  storeEvidence: boolean
+): Promise<{ consent: UserDoc['consent'] }> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'Accounts are not configured on this server');
+  const user = await upsertUser({ id: userId }, { store_evidence: storeEvidence });
+  return { consent: user.consent };
+}
+
+/**
+ * Store an uploaded evidence file for a consented user. Re-sniffs and caps the
+ * buffer (never trust caller MIME), returns the evidenceId. 503 when storage off,
+ * 403 until the user has explicitly consented to evidence storage (POPIA).
+ */
+export async function storeEvidenceLocal(userId: string, buffer: Buffer): Promise<{ evidenceId: string }> {
+  if (!blobEnabled()) throw new LocalHttpError(503, 'Evidence storage is not configured on this server');
+  // POPIA: never persist evidence without the user's explicit, recorded consent.
+  if (!cosmosEnabled()) {
+    throw new LocalHttpError(503, 'Evidence storage consent is not configured on this server');
+  }
+  const user = await getUser(userId);
+  if (!user?.consent?.store_evidence) {
+    throw new LocalHttpError(403, 'Enable evidence storage in your privacy settings before uploading files.');
+  }
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) throw new LocalHttpError(400, 'file is required');
+  const kind = sniffUploadType(buffer) ?? (sniffAudioType(buffer) ? 'audio' : null);
+  if (!kind) throw new LocalHttpError(415, 'Unsupported evidence file type');
+  const ext = SNIFFED_UPLOAD_EXT[kind] ?? (kind === 'audio' ? 'bin' : 'bin');
+  const contentType = kind === 'pdf' ? 'application/pdf' : kind === 'audio' ? 'application/octet-stream' : `image/${kind}`;
+  try {
+    const evidenceId = await putEvidence(userId, buffer, contentType, ext);
+    return { evidenceId };
+  } catch (error) {
+    if (error instanceof Error && /too large/.test(error.message)) {
+      throw new LocalHttpError(413, 'Evidence file too large to store');
+    }
+    throw error;
+  }
+}
+
+/** Stream-safe fetch of a user's own evidence file (404 when missing/not owned). */
+export async function getEvidenceLocal(
+  userId: string,
+  evidenceId: string
+): Promise<{ buffer: Buffer; contentType: string }> {
+  if (!blobEnabled()) throw new LocalHttpError(503, 'Evidence storage is not configured on this server');
+  const file = await getEvidence(userId, typeof evidenceId === 'string' ? evidenceId : '');
+  if (!file) throw new LocalHttpError(404, 'Evidence not found');
+  return file;
+}
+
+/**
+ * POPIA right to erasure: delete the account, its cases + usage, and any stored
+ * evidence blobs. De-identified community reports are intentionally retained.
+ */
+export async function deleteAccountLocal(userId: string): Promise<{ ok: true }> {
+  if (!cosmosEnabled()) throw new LocalHttpError(503, 'Accounts are not configured on this server');
+  const { evidenceIds } = await deleteUserData(userId);
+  await Promise.all(evidenceIds.map((id) => deleteEvidence(id)));
+  return { ok: true };
 }
 
 /** Persist a finished (redacted) report result for sharing; returns its id. */
@@ -323,11 +840,12 @@ export async function saveSharedReportLocal(
   result: unknown
 ): Promise<{ id: string; expiresInDays: number }> {
   if (!cosmosEnabled()) throw new LocalHttpError(503, 'Sharing is not configured on this server');
-  if (!result || typeof result !== 'object') {
+  const sanitized = sanitizeSharedAnalysisResult(result);
+  if (!sanitized) {
     throw new LocalHttpError(400, 'A report result is required');
   }
   try {
-    return await saveSharedReport(result);
+    return await saveSharedReport(sanitized);
   } catch (error) {
     if (error instanceof Error && /too large/.test(error.message)) {
       throw new LocalHttpError(413, 'This report is too large to share');
@@ -341,11 +859,13 @@ export async function getSharedReportLocal(id: string): Promise<unknown> {
   if (!cosmosEnabled()) throw new LocalHttpError(503, 'Sharing is not configured on this server');
   const result = await getSharedReport(typeof id === 'string' ? id : '');
   if (!result) throw new LocalHttpError(404, 'This shared report was not found or has expired');
-  return result;
+  const sanitized = sanitizeSharedAnalysisResult(result);
+  if (!sanitized) throw new LocalHttpError(404, 'This shared report was not found or has expired');
+  return sanitized;
 }
 
 export async function networkStatsLocal(): Promise<unknown> {
-  if (scamNetwork.enabled) await entityGraph.refresh();
+  if (scamNetwork.enabled) await entityGraph.refresh(false);
   return entityGraph.stats();
 }
 
@@ -353,7 +873,7 @@ export async function networkGraphLocal(params: {
   type?: unknown;
   minTrust?: unknown;
 }): Promise<unknown> {
-  if (scamNetwork.enabled) await entityGraph.refresh();
+  if (scamNetwork.enabled) await entityGraph.refresh(false);
   const type =
     typeof params.type === 'string' && NODE_TYPES.has(params.type)
       ? (params.type as NodeType)
@@ -369,7 +889,7 @@ export async function graphLookupLocal(identifier: string): Promise<unknown> {
   const trimmed = identifier.trim();
   if (!trimmed) throw new Error('identifier is required');
   if (trimmed.length > 300) throw new Error('identifier is too long');
-  if (scamNetwork.enabled) await entityGraph.refresh();
+  if (scamNetwork.enabled) await entityGraph.refresh(false);
   return entityGraph.lookup(trimmed);
 }
 

@@ -64,6 +64,12 @@ const LEGAL_SUFFIXES = new Set([
   'labs',
 ]);
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  throw reason instanceof Error ? reason : new Error('Web research aborted');
+}
+
 function companyTokens(company: string): string[] {
   return company
     .toLowerCase()
@@ -95,16 +101,19 @@ function hostContainsCompany(host: string, company: string): boolean {
 
 // ── SerpAPI (Google) ────────────────────────────────────────────────────────
 
-async function serp(query: string, key: string): Promise<ResearchResult[]> {
+async function serp(query: string, key: string, signal?: AbortSignal): Promise<ResearchResult[]> {
   try {
+    throwIfAborted(signal);
     const res = await axios.get('https://serpapi.com/search.json', {
       params: { engine: 'google', q: query, api_key: key, num: 5 },
+      signal,
       timeout: 15000,
     });
     return (res.data.organic_results || []).slice(0, 5).map((o: any) =>
       cleanResult({ title: o.title, link: o.link, snippet: o.snippet, source: 'google' })
     );
   } catch (e) {
+    throwIfAborted(signal);
     console.error('[serp] query failed:', e instanceof Error ? e.message : e);
     return [];
   }
@@ -112,43 +121,49 @@ async function serp(query: string, key: string): Promise<ResearchResult[]> {
 
 // ── News (NewsAPI + GNews) ──────────────────────────────────────────────────
 
-async function newsApi(query: string, key: string): Promise<ResearchResult[]> {
+async function newsApi(query: string, key: string, signal?: AbortSignal): Promise<ResearchResult[]> {
   try {
+    throwIfAborted(signal);
     const res = await axios.get('https://newsapi.org/v2/everything', {
       params: { q: query, language: 'en', sortBy: 'relevancy', pageSize: 5 },
       headers: { 'X-Api-Key': key },
+      signal,
       timeout: 12000,
     });
     return (res.data.articles || []).slice(0, 5).map((a: any) =>
       cleanResult({ title: a.title, link: a.url, snippet: a.description, source: 'newsapi' })
     );
   } catch (e) {
+    throwIfAborted(signal);
     console.error('[newsapi] query failed:', e instanceof Error ? e.message : e);
     return [];
   }
 }
 
-async function gnews(query: string, key: string): Promise<ResearchResult[]> {
+async function gnews(query: string, key: string, signal?: AbortSignal): Promise<ResearchResult[]> {
   try {
+    throwIfAborted(signal);
     const res = await axios.get('https://gnews.io/api/v4/search', {
       params: { q: query, lang: 'en', max: 5, apikey: key },
+      signal,
       timeout: 12000,
     });
     return (res.data.articles || []).slice(0, 5).map((a: any) =>
       cleanResult({ title: a.title, link: a.url, snippet: a.description, source: 'gnews' })
     );
   } catch (e) {
+    throwIfAborted(signal);
     console.error('[gnews] query failed:', e instanceof Error ? e.message : e);
     return [];
   }
 }
 
 /** Query whichever news providers are configured for a company's scam coverage. */
-async function newsScamSearch(company: string): Promise<ResearchResult[]> {
+async function newsScamSearch(company: string, signal?: AbortSignal): Promise<ResearchResult[]> {
   const query = `${company} scam OR fraud OR warning OR complaint`;
   const tasks: Promise<ResearchResult[]>[] = [];
-  if (process.env.NEWSAPI_API_KEY) tasks.push(newsApi(query, process.env.NEWSAPI_API_KEY));
-  if (process.env.GNEWS_API_KEY) tasks.push(gnews(query, process.env.GNEWS_API_KEY));
+  if (process.env.NEWSAPI_API_KEY) tasks.push(newsApi(query, process.env.NEWSAPI_API_KEY, signal));
+  if (process.env.GNEWS_API_KEY) tasks.push(gnews(query, process.env.GNEWS_API_KEY, signal));
   if (!tasks.length) return [];
   const results = await Promise.all(tasks);
   // Merge + de-dupe by URL.
@@ -186,8 +201,10 @@ function isOfficialListing(r: ResearchResult, company: string, domain?: string):
 export async function researchCompany(
   company: string,
   role?: string,
-  domain?: string
+  domain?: string,
+  signal?: AbortSignal
 ): Promise<CompanyResearch> {
+  throwIfAborted(signal);
   const serpKey = process.env.SERPAPI_API_KEY;
 
   // SerpAPI (Google) — careers + scam queries, when configured.
@@ -196,11 +213,15 @@ export async function researchCompany(
   if (serpKey) {
     const careersQuery = `${company} ${role || ''} careers OR jobs`.replace(/\s+/g, ' ').trim();
     const scamQuery = `"${company}" recruiter scam OR fraud OR warning OR complaint`;
-    [careers, serpScam] = await Promise.all([serp(careersQuery, serpKey), serp(scamQuery, serpKey)]);
+    [careers, serpScam] = await Promise.all([
+      serp(careersQuery, serpKey, signal),
+      serp(scamQuery, serpKey, signal),
+    ]);
   }
 
   // News providers — independent scam/fraud coverage.
-  const news = await newsScamSearch(company);
+  const news = await newsScamSearch(company, signal);
+  throwIfAborted(signal);
 
   const all = [...careers, ...serpScam, ...news];
   const listingHit = careers.find((r) => isOfficialListing(r, company, domain));

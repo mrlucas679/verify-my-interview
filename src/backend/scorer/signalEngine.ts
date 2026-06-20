@@ -362,8 +362,9 @@ export function deriveSignals(
         evidence: { source: 'lookup_domain_rdap', detail: `${dom.domain} is a known disposable provider` },
       });
     }
-    const mx = dom.dns_records?.MX || [];
-    if (emailDomain && mx.length === 0) {
+    const mx = Array.isArray(dom.dns_records?.MX) ? dom.dns_records.MX : [];
+    const mxProviderValid = dom.mx_valid === true;
+    if (emailDomain && mx.length === 0 && !mxProviderValid) {
       signals.push({
         id: 'no_mx_records',
         label: 'Recruiter domain cannot receive email',
@@ -372,12 +373,15 @@ export function deriveSignals(
         evidence: { source: 'lookup_domain_rdap', detail: `${dom.domain} has no mail records, which is unusual for a real employer` },
       });
     } else if (emailDomain) {
+      const detail = mx.length
+        ? `${dom.domain} has ${mx.length} mail record(s)`
+        : `${dom.domain} mail delivery was validated by the email reputation provider`;
       signals.push({
         id: 'has_mx',
         label: 'Domain can receive email',
         category: 'positive',
         points: -5,
-        evidence: { source: 'lookup_domain_rdap', detail: `${dom.domain} has ${mx.length} mail record(s)` },
+        evidence: { source: 'lookup_domain_rdap', detail },
       });
     }
     // Real reputation verdicts (only present when email-reputation enrichment ran).

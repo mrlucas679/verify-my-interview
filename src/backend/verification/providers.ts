@@ -16,8 +16,13 @@ import axios from 'axios';
 
 const TIMEOUT_MS = 8000;
 
-function get<T = any>(url: string, params: Record<string, unknown>, headers?: Record<string, string>) {
-  return axios.get<T>(url, { params, headers, timeout: TIMEOUT_MS });
+function get<T = any>(
+  url: string,
+  params: Record<string, unknown>,
+  headers?: Record<string, string>,
+  signal?: AbortSignal
+) {
+  return axios.get<T>(url, { params, headers, signal, timeout: TIMEOUT_MS });
 }
 
 /** Output validation: provider payloads are untrusted — keep strings strings, capped. */
@@ -44,13 +49,13 @@ export function whoisEnabled(): boolean {
  * Normalized WHOIS/RDAP lookup. Primary: who-dat.as93.net (free, no key,
  * consistent shape across TLDs). Fallback: whoisjson.com when a key is set.
  */
-export async function whoisLookup(domain: string): Promise<WhoisInfo | null> {
+export async function whoisLookup(domain: string, signal?: AbortSignal): Promise<WhoisInfo | null> {
   if (!whoisEnabled() || !domain) return null;
   const host = domain.toLowerCase().replace(/^www\./, '');
 
   // who-dat — normalized RDAP with WHOIS fallback, single consistent shape.
   try {
-    const { data } = await get(`https://who-dat.as93.net/v1/whois/${encodeURIComponent(host)}`, {});
+    const { data } = await get(`https://who-dat.as93.net/v1/whois/${encodeURIComponent(host)}`, {}, undefined, signal);
     if (data && (data.dates || data.isRegistered !== undefined)) {
       return {
         created: data.dates?.created ?? undefined,
@@ -71,7 +76,8 @@ export async function whoisLookup(domain: string): Promise<WhoisInfo | null> {
       const { data } = await get(
         'https://whoisjson.com/api/v1/whois',
         { domain: host },
-        { Authorization: `TOKEN=${key}` }
+        { Authorization: `TOKEN=${key}` },
+        signal
       );
       const raw: string = typeof data?.data === 'string' ? data.data : JSON.stringify(data ?? {});
       const created = raw.match(/Creation Date:\s*([0-9T:\-Z.]+)/i)?.[1];
@@ -103,14 +109,14 @@ export interface EmailReputation {
 }
 
 /** Abstract Email Reputation API. Person-name fields are intentionally discarded. */
-export async function emailReputation(email: string): Promise<EmailReputation | null> {
+export async function emailReputation(email: string, signal?: AbortSignal): Promise<EmailReputation | null> {
   const key = process.env.ABSTRACT_EMAIL_REPUTATION_KEY;
   if (!key || !email) return null;
   try {
     const { data } = await get('https://emailreputation.abstractapi.com/v1/', {
       api_key: key,
       email,
-    });
+    }, undefined, signal);
     if (!data || data.email_deliverability == null) return null;
     const q = data.email_quality ?? {};
     const dom = data.email_domain ?? {};
@@ -155,7 +161,11 @@ export function phoneIntelEnabled(): boolean {
  * NOT read (POPIA minimality) — risk scoring only uses line type / reputation.
  * `country` defaults to ZA so local South African formats (e.g. 0XX...) resolve.
  */
-export async function phoneIntelligence(phone: string, country = 'ZA'): Promise<PhoneIntel | null> {
+export async function phoneIntelligence(
+  phone: string,
+  country = 'ZA',
+  signal?: AbortSignal
+): Promise<PhoneIntel | null> {
   const key = process.env.ABSTRACT_PHONE_KEY;
   if (!key || !phone) return null;
   const cleaned = phone.replace(/[^\d+]/g, '');
@@ -165,7 +175,7 @@ export async function phoneIntelligence(phone: string, country = 'ZA'): Promise<
       api_key: key,
       phone: cleaned,
       country,
-    });
+    }, undefined, signal);
     if (!data || data.phone_validation == null) return null;
     const carrier = data.phone_carrier ?? {};
     const risk = data.phone_risk ?? {};
@@ -198,14 +208,14 @@ export interface CompanyEnrichment {
 }
 
 /** Abstract Company Enrichment API — keyed on a domain. */
-export async function companyEnrichment(domain: string): Promise<CompanyEnrichment | null> {
+export async function companyEnrichment(domain: string, signal?: AbortSignal): Promise<CompanyEnrichment | null> {
   const key = process.env.ABSTRACT_COMPANY_KEY;
   if (!key || !domain) return null;
   try {
     const { data } = await get('https://companyenrichment.abstractapi.com/v2', {
       api_key: key,
       domain: domain.toLowerCase().replace(/^www\./, ''),
-    });
+    }, undefined, signal);
     if (!data) return null;
     return {
       found: Boolean(data.company_name),
@@ -234,14 +244,14 @@ export interface IpIntel {
 }
 
 /** Abstract IP Intelligence API — used on an email's originating (Received:) IP. */
-export async function ipIntelligence(ip: string): Promise<IpIntel | null> {
+export async function ipIntelligence(ip: string, signal?: AbortSignal): Promise<IpIntel | null> {
   const key = process.env.ABSTRACT_IP_KEY;
   if (!key || !ip) return null;
   try {
     const { data } = await get('https://ip-intelligence.abstractapi.com/v1/', {
       api_key: key,
       ip_address: ip,
-    });
+    }, undefined, signal);
     if (!data || !data.security) return null;
     return {
       isVpn: data.security.is_vpn ?? undefined,

@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Mic, Square, Pause, Play, Loader2, Upload, RotateCcw, FileAudio } from 'lucide-react';
+import { Loader2, Square, X } from 'lucide-react';
 import { transcribeAudio } from '../lib/api';
 
 interface VoiceRecorderProps {
-  onTranscript: (text: string, meta: { durationSec: number; locale: string }) => void;
+  onTranscript: (text: string, meta: { durationSec: number; locale: string }, file?: File) => void;
+  onCancel?: () => void;
 }
 
-type RecState = 'idle' | 'recording' | 'paused' | 'recorded';
+type RecState = 'starting' | 'recording' | 'transcribing' | 'error';
 
-// Probed in priority order; first supported codec wins.
 const MIME_CANDIDATES = [
   'audio/webm;codecs=opus',
   'audio/webm',
@@ -16,15 +16,14 @@ const MIME_CANDIDATES = [
   'audio/ogg;codecs=opus',
 ];
 
-// Client-side guardrails (server enforces its own 25 MB cap independently).
-const MAX_RECORD_SEC = 5 * 60; // 5 minutes
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
+const MAX_RECORD_SEC = 5 * 60;
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 function pickMimeType(): string | undefined {
   if (typeof MediaRecorder === 'undefined') return undefined;
-  return MIME_CANDIDATES.find((m) => {
+  return MIME_CANDIDATES.find((mime) => {
     try {
-      return MediaRecorder.isTypeSupported(m);
+      return MediaRecorder.isTypeSupported(mime);
     } catch {
       return false;
     }
@@ -45,25 +44,33 @@ function fmt(totalSec: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-export function VoiceRecorder({ onTranscript }: VoiceRecorderProps) {
-  const recorderSupported = typeof MediaRecorder !== 'undefined';
+function Waveform({ active }: { active: boolean }) {
+  return (
+    <div className="flex h-8 items-center gap-1" aria-hidden="true">
+      {Array.from({ length: 18 }).map((_, index) => (
+        <span
+          key={index}
+          className={`w-1 rounded-full bg-accent/80 ${active ? 'motion-safe:animate-pulse' : ''}`}
+          style={{ height: `${8 + ((index * 7) % 22)}px`, animationDelay: `${index * 45}ms` }}
+        />
+      ))}
+    </div>
+  );
+}
 
-  const [state, setState] = useState<RecState>('idle');
+export function VoiceRecorder({ onTranscript, onCancel }: VoiceRecorderProps) {
+  const [state, setState] = useState<RecState>('starting');
   const [elapsed, setElapsed] = useState(0);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [transcribing, setTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const blobRef = useRef<Blob | null>(null);
   const mimeRef = useRef<string | undefined>(undefined);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const audioUrlRef = useRef<string | null>(null); // mirrors audioUrl for unmount revoke
+  const elapsedRef = useRef(0);
   const transcribeAbortRef = useRef<AbortController | null>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
+  const cancelledRef = useRef(false);
 
   const stopTimer = useCallback(() => {
     if (timerRef.current) {
@@ -73,391 +80,180 @@ export function VoiceRecorder({ onTranscript }: VoiceRecorderProps) {
   }, []);
 
   const stopTracks = useCallback(() => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
   }, []);
 
-  // Cleanup on unmount: stop timer, release the mic, revoke the blob URL.
-  // Reads refs (not state) so the teardown always sees current values.
-  useEffect(() => {
-    return () => {
-      stopTimer();
-      stopTracks();
-      transcribeAbortRef.current?.abort();
-      const r = mediaRecorderRef.current;
-      if (r && r.state !== 'inactive') {
-        try {
-          r.stop();
-        } catch {
-          /* recorder already torn down */
-        }
+  const runTranscription = useCallback(
+    async (blob: Blob) => {
+      if (blob.size > MAX_UPLOAD_BYTES) {
+        setState('error');
+        setError('That recording is over 25 MB. Record a shorter clip, or type your story instead.');
+        return;
       }
-      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
-    };
+      const controller = new AbortController();
+      transcribeAbortRef.current = controller;
+      setState('transcribing');
+      try {
+        const result = await transcribeAudio(blob, `recording.${extForMime(mimeRef.current)}`, {
+          signal: controller.signal,
+        });
+        if (!result.text.trim()) {
+          setState('error');
+          setError('No speech was recognised. Try again, or type your story instead.');
+          return;
+        }
+        const file = new File([blob], `recording.${extForMime(mimeRef.current)}`, {
+          type: blob.type || mimeRef.current || 'audio/webm',
+        });
+        onTranscript(result.text, {
+          durationSec: result.durationSec || elapsedRef.current,
+          locale: result.locale,
+        }, file);
+      } catch (event) {
+        if (controller.signal.aborted) return;
+        setState('error');
+        setError(event instanceof Error ? event.message : 'Transcription failed. Type or paste the message instead.');
+      } finally {
+        if (transcribeAbortRef.current === controller) transcribeAbortRef.current = null;
+      }
+    },
+    [onTranscript]
+  );
+
+  const stopRecording = useCallback(() => {
+    stopTimer();
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+      return;
+    }
+    stopTracks();
   }, [stopTimer, stopTracks]);
 
-  // Replace the current playback URL, revoking the previous object URL.
-  const swapUrl = useCallback((next: string | null) => {
-    setAudioUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return next;
-    });
-    audioUrlRef.current = next;
-  }, []);
+  const startTimer = useCallback(() => {
+    stopTimer();
+    timerRef.current = setInterval(() => {
+      elapsedRef.current += 1;
+      setElapsed(elapsedRef.current);
+      if (elapsedRef.current >= MAX_RECORD_SEC) stopRecording();
+    }, 1000);
+  }, [stopRecording, stopTimer]);
 
-  async function startRecording() {
-    setError(null);
-    setNotice(null);
+  const startRecording = useCallback(async () => {
+    if (typeof MediaRecorder === 'undefined') {
+      setState('error');
+      setError('Recording is not available in this browser. Use the attachment button to upload a voice note.');
+      return;
+    }
+
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (e) {
-      const name = e instanceof DOMException ? e.name : '';
-      if (name === 'NotAllowedError' || name === 'SecurityError') {
-        setError('Allow microphone access in your browser, or upload a voice note instead.');
-      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-        setError('No microphone was found. Upload a voice note, or type your story instead.');
-      } else {
-        setError(
-          e instanceof Error
-            ? e.message
-            : 'Could not start recording. Upload a voice note instead.'
-        );
-      }
+    } catch (event) {
+      const name = event instanceof DOMException ? event.name : '';
+      setState('error');
+      setError(
+        name === 'NotAllowedError' || name === 'SecurityError'
+          ? 'Allow microphone access in your browser, or use the attachment button to upload a voice note.'
+          : 'Could not start recording. Use the attachment button to upload a voice note instead.'
+      );
       return;
     }
 
     streamRef.current = stream;
-    const mime = pickMimeType();
-    mimeRef.current = mime;
     chunksRef.current = [];
-    swapUrl(null);
-    blobRef.current = null;
+    elapsedRef.current = 0;
+    setElapsed(0);
+    mimeRef.current = pickMimeType();
 
-    let recorder: MediaRecorder;
     try {
-      try {
-        recorder = mime
-          ? new MediaRecorder(stream, { mimeType: mime })
-          : new MediaRecorder(stream);
-      } catch {
-        recorder = new MediaRecorder(stream);
-      }
+      recorderRef.current = mimeRef.current
+        ? new MediaRecorder(stream, { mimeType: mimeRef.current })
+        : new MediaRecorder(stream);
     } catch {
-      // Even the bare constructor failed — release the mic so the browser's
-      // recording indicator doesn't stay lit, and offer the upload path.
       stopTracks();
-      setError('Recording is not supported in this browser. Upload a voice note instead.');
+      setState('error');
+      setError('Recording is not supported in this browser. Use the attachment button to upload a voice note.');
       return;
     }
-    mediaRecorderRef.current = recorder;
 
-    recorder.ondataavailable = (ev) => {
-      if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
+    recorderRef.current.ondataavailable = (event) => {
+      if (event.data?.size) chunksRef.current.push(event.data);
     };
-    recorder.onstop = () => {
+    recorderRef.current.onstop = () => {
+      stopTracks();
+      if (cancelledRef.current) return;
       const blob = new Blob(chunksRef.current, { type: mimeRef.current || 'audio/webm' });
-      blobRef.current = blob;
-      swapUrl(URL.createObjectURL(blob));
-      stopTracks();
-      setState('recorded');
+      void runTranscription(blob);
     };
 
-    recorder.start();
-    setElapsed(0);
-    startTimer();
+    recorderRef.current.start();
     setState('recording');
-  }
+    startTimer();
+  }, [runTranscription, startTimer, stopTracks]);
 
-  // One tick per second; auto-stops at the 5-minute cap with a calm notice.
-  function startTimer() {
-    stopTimer();
-    timerRef.current = setInterval(() => {
-      setElapsed((e) => {
-        const next = e + 1;
-        if (next >= MAX_RECORD_SEC) {
-          stopRecording();
-          setNotice('Recording stopped at the 5-minute limit. Review it, then transcribe.');
-          return MAX_RECORD_SEC;
-        }
-        return next;
-      });
-    }, 1000);
-  }
-
-  function pauseRecording() {
-    const r = mediaRecorderRef.current;
-    if (r && r.state === 'recording') {
-      r.pause();
+  useEffect(() => {
+    void startRecording();
+    return () => {
+      cancelledRef.current = true;
       stopTimer();
-      setState('paused');
-    }
-  }
-
-  function resumeRecording() {
-    const r = mediaRecorderRef.current;
-    if (r && r.state === 'paused') {
-      r.resume();
-      startTimer();
-      setState('recording');
-    }
-  }
-
-  function stopRecording() {
-    const r = mediaRecorderRef.current;
-    stopTimer();
-    if (r && r.state !== 'inactive') {
-      r.stop(); // onstop builds the blob + flips state to 'recorded'
-    } else {
+      transcribeAbortRef.current?.abort();
+      const recorder = recorderRef.current;
+      if (recorder && recorder.state !== 'inactive') {
+        try {
+          recorder.stop();
+        } catch {
+          /* already stopped */
+        }
+      }
       stopTracks();
-      setState('recorded');
-    }
-  }
-
-  function reRecord() {
-    swapUrl(null);
-    blobRef.current = null;
-    chunksRef.current = [];
-    setElapsed(0);
-    setError(null);
-    setNotice(null);
-    setState('idle');
-  }
-
-  async function runTranscription(blob: Blob, fileName: string, fallbackDuration: number) {
-    transcribeAbortRef.current?.abort();
-    const controller = new AbortController();
-    transcribeAbortRef.current = controller;
-    setError(null);
-    setTranscribing(true);
-    try {
-      const { text, durationSec, locale } = await transcribeAudio(blob, fileName, {
-        signal: controller.signal,
-      });
-      if (!text.trim()) {
-        setError('No speech was recognised. Try again, or type your story instead.');
-        return;
-      }
-      onTranscript(text, { durationSec: durationSec || fallbackDuration, locale });
-    } catch (e) {
-      if (controller.signal.aborted) return;
-      // api.ts surfaces the server's message verbatim (503/415/422/network).
-      setError(
-        e instanceof Error ? e.message : 'Transcription failed. Type or paste the message instead.'
-      );
-    } finally {
-      if (transcribeAbortRef.current === controller) {
-        transcribeAbortRef.current = null;
-        setTranscribing(false);
-      }
-    }
-  }
-
-  function transcribeRecording() {
-    const blob = blobRef.current;
-    if (!blob) return;
-    if (blob.size > MAX_UPLOAD_BYTES) {
-      setError('That recording is over 25 MB. Record a shorter clip, or type your story instead.');
-      return;
-    }
-    void runTranscription(blob, `recording.${extForMime(mimeRef.current)}`, elapsed);
-  }
-
-  function onUpload(file: File) {
-    setNotice(null);
-    if (file.size > MAX_UPLOAD_BYTES) {
-      setError('That file is over 25 MB. Upload a shorter voice note, or type your story instead.');
-      return;
-    }
-    void runTranscription(file, file.name, 0);
-  }
-
-  const showRecorderPanel = state === 'idle' || state === 'recording' || state === 'paused';
+    };
+  }, [startRecording, stopTimer, stopTracks]);
 
   return (
-    <div>
-      <div className="rounded-lg border border-line bg-ink-900 p-4">
-        <p className="text-sm text-slate-200">Tell us what happened, in your own words.</p>
-        <p className="mt-2 text-xs leading-relaxed text-muted">
-          For the strongest investigation, try to say:
-        </p>
-        <ul className="mt-1.5 space-y-1 text-xs text-faint">
-          <li>The company or recruiter name, and where they contacted you.</li>
-          <li>The exact email address or phone number they used.</li>
-          <li>What they asked you to do, such as interviews, forms, or downloads.</li>
-          <li>Any payment, fees, gift cards, or banking details requested.</li>
-          <li>Any documents or personal information they wanted.</li>
-        </ul>
-      </div>
-
-      {recorderSupported && (
-        <div className="mt-4">
-          {/* Recording controls */}
-          {showRecorderPanel && (
-            <div className="flex flex-col items-center gap-4 rounded-lg border border-line bg-ink-850 py-8">
-              {state !== 'idle' && (
-                <div className="flex items-center gap-2.5" role="status" aria-live="polite">
-                  {state === 'recording' && (
-                    <span className="h-2.5 w-2.5 rounded-full bg-risk-scam" aria-hidden="true" />
-                  )}
-                  <span className="font-mono text-2xl tabular-nums text-slate-100">
-                    {fmt(elapsed)}
-                  </span>
-                  <span className="text-xs text-faint">
-                    {state === 'paused' ? 'Paused' : 'Recording'}
-                  </span>
-                </div>
-              )}
-
-              <div className="flex items-center gap-3">
-                {state === 'idle' && (
-                  <button
-                    type="button"
-                    onClick={() => void startRecording()}
-                    aria-label="Start recording your story"
-                    className="btn-primary"
-                  >
-                    <Mic className="h-4 w-4" strokeWidth={1.75} /> Record your story
-                  </button>
-                )}
-
-                {state === 'recording' && (
-                  <button
-                    type="button"
-                    onClick={pauseRecording}
-                    aria-label="Pause recording"
-                    className="btn-ghost"
-                  >
-                    <Pause className="h-4 w-4" strokeWidth={1.75} /> Pause
-                  </button>
-                )}
-
-                {state === 'paused' && (
-                  <button
-                    type="button"
-                    onClick={resumeRecording}
-                    aria-label="Resume recording"
-                    className="btn-ghost"
-                  >
-                    <Play className="h-4 w-4" strokeWidth={1.75} /> Resume
-                  </button>
-                )}
-
-                {(state === 'recording' || state === 'paused') && (
-                  <button
-                    type="button"
-                    onClick={stopRecording}
-                    aria-label="Stop recording"
-                    className="btn-primary"
-                  >
-                    <Square className="h-4 w-4" strokeWidth={1.75} /> Stop
-                  </button>
-                )}
-              </div>
-
-              {state === 'idle' && (
-                <p className="text-xs text-faint">Up to 5 minutes. Nothing is sent until you transcribe.</p>
-              )}
-            </div>
-          )}
-
-          {/* Playback + transcribe */}
-          {state === 'recorded' && (
-            <div className="flex flex-col gap-4 rounded-lg border border-line bg-ink-850 p-4">
-              <div className="flex items-center gap-2 text-xs text-muted">
-                <FileAudio className="h-4 w-4" strokeWidth={1.75} />
-                Recorded {fmt(elapsed)}. Review it, then transcribe.
-              </div>
-              {audioUrl && (
-                <audio controls src={audioUrl} className="w-full">
-                  Your browser does not support audio playback.
-                </audio>
-              )}
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={reRecord}
-                  disabled={transcribing}
-                  aria-label="Discard and re-record your story"
-                  className="btn-ghost"
-                >
-                  <RotateCcw className="h-4 w-4" strokeWidth={1.75} /> Re-record
-                </button>
-                <button
-                  type="button"
-                  onClick={transcribeRecording}
-                  disabled={transcribing}
-                  aria-label="Transcribe recording"
-                  className="btn-primary"
-                >
-                  {transcribing ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} /> Transcribing...
-                    </>
-                  ) : (
-                    <>
-                      <Mic className="h-4 w-4" strokeWidth={1.75} /> Transcribe recording
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Upload a voice note (always available — covers WhatsApp notes + no-mic browsers) */}
-      <div className="mt-4 flex flex-col items-center gap-2 text-center">
-        {recorderSupported && <span className="text-xs text-faint">or upload a voice note</span>}
-        <button
-          type="button"
-          onClick={() => fileInput.current?.click()}
-          disabled={transcribing}
-          aria-label="Upload a voice note"
-          className="btn-ghost"
-        >
-          {transcribing && !recorderSupported ? (
-            <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
-          ) : (
-            <Upload className="h-4 w-4" strokeWidth={1.75} />
-          )}
-          Upload a voice note
-        </button>
-        {!recorderSupported && (
-          <p className="text-xs text-faint">
-            Recording is not available in this browser. Upload an audio file instead.
-          </p>
+    <div className="relative flex items-center justify-between gap-3 rounded-xl border border-line bg-ink-900 px-3 py-2.5">
+      <div className="flex min-w-0 items-center gap-3">
+        {state === 'transcribing' || state === 'starting' ? (
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" strokeWidth={1.75} />
+        ) : (
+          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-risk-scam" aria-hidden="true" />
         )}
-        <input
-          ref={fileInput}
-          type="file"
-          accept="audio/*,.amr"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) onUpload(f);
-            e.target.value = '';
-          }}
-        />
+        <Waveform active={state === 'recording'} />
+        <span className="font-mono text-sm tabular-nums text-slate-100">{fmt(elapsed)}</span>
+        <span className="sr-only" role="status" aria-live="polite">
+          {state === 'recording' ? 'Recording' : state === 'transcribing' ? 'Transcribing recording' : 'Starting recorder'}
+        </span>
       </div>
 
-      {transcribing && (
-        <p className="sr-only" role="status" aria-live="assertive">
-          Transcribing your audio. This can take a few seconds.
-        </p>
-      )}
-
-      {notice && !error && (
-        <p className="mt-4 rounded-lg border border-line bg-ink-800 p-3 text-xs text-muted" role="status">
-          {notice}
-        </p>
-      )}
+      <div className="flex items-center gap-1.5">
+        {state === 'recording' && (
+          <button
+            type="button"
+            onClick={stopRecording}
+            aria-label="Stop and transcribe recording"
+            className="rounded-full bg-accent p-2 text-white shadow-glow transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <Square className="h-4 w-4" strokeWidth={1.75} />
+          </button>
+        )}
+        {onCancel && (
+          <button
+            type="button"
+            onClick={() => {
+              cancelledRef.current = true;
+              onCancel();
+            }}
+            aria-label="Close voice recorder"
+            className="rounded-full p-2 text-muted transition hover:bg-ink-800 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <X className="h-4 w-4" strokeWidth={1.75} />
+          </button>
+        )}
+      </div>
 
       {error && (
-        <p
-          className="mt-4 rounded-lg border border-risk-needs/40 bg-risk-needs/10 p-3 text-xs text-risk-needs"
-          role="alert"
-        >
+        <p className="absolute left-3 right-3 top-full mt-2 rounded-lg border border-risk-needs/40 bg-risk-needs/10 p-2 text-xs text-risk-needs" role="alert">
           {error}
         </p>
       )}

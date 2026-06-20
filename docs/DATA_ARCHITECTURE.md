@@ -55,6 +55,7 @@ removes the current "Search is the only store" fragility.
 |---|---|---|---|
 | `users` | Account profile, consent flags, prefs | `/id` (Entra subject) | yes (consented) |
 | `cases` | A user's verification cases: evidence refs, report snapshot, retentionExpiry | `/userId` | yes (consented) |
+| `pending_reports` | Public scam reports awaiting admin moderation; not indexed/scored until approved | `/reportId` | **no** (de-identified) |
 | `reports` | Community scam corpus (redacted IOCs, trust) — today's `NetworkReport` | `/reportId` | **no** (de-identified) |
 | `companies` | Resolved company entities | `/id` | no |
 | `trustScores` | Per-entity trust (entity, type, level, points, lastComputed) | `/entityId` | no |
@@ -96,18 +97,50 @@ removes the current "Search is the only store" fragility.
 
 ## 7. Build sequence (each slice: env-gated, graceful degradation, gates stay green, verified against real resources)
 
-1. **Cosmos foundation (non-PII):** provision serverless Cosmos; data-access layer;
-   make `reports` + `trustScores` + `auditLogs` + `companies` the system of record;
-   dual-write/migrate from Search; offline path unchanged.
-2. **Event backbone:** Service Bus + a Functions consumer; `report.created` →
-   re-index Search/KB + recompute trust.
-3. **Auth + freemium:** Entra External ID (Google + Apple); `users` + `cases`
-   collections in **South Africa North**; consent capture; **usage metering** +
-   free/premium **plan enforcement at `/analyze`**; **billing** (Stripe) webhooks.
-4. **Evidence Blob:** consented storage in South Africa North + 12-month retention
-   lifecycle + erasure endpoint.
-5. **Frontend:** Google/Apple sign-in, account UI, case history, plan/upgrade +
-   consent flows; optional SWA/Vercel split.
+1. ✅ **Cosmos foundation (non-PII):** serverless Cosmos data-access layer
+   (`data/cosmos.ts`); `reports` is the durable system of record (Search = derived
+   index); shared-report results with TTL. Offline path unchanged. _(implemented)_
+2. ✅ **Event backbone:** Service Bus queue (`events/serviceBus.ts`) + in-process
+   consumer; `report.created` → entity-graph refresh. _(implemented)_
+3. ✅ **Auth + FREE tier (premium deferred):** Entra External ID JWT validation
+   (`auth/identity.ts`, Google/Apple as Entra social IdPs); `attachIdentity` +
+   `enforceAnalyzeAccess` + `requireAuth` (`auth/middleware.ts`); `users` + `cases`
+   + `usage` collections (PII-residency hook `COSMOS_PII_CONNECTION_STRING` → SA
+   North, falls back to main); consent capture on `users`; **usage metering** at
+   `/analyze`. **Policy (decided 2026-06-18):** signed-in = **unlimited** (metered,
+   not capped); anonymous = **1 trial check** (`AUTH_ANON_TRIAL_MAX`) then sign-in.
+   **Deferred:** premium tier, **billing (Stripe)**, and the usage hard-cap (the
+   meter is in place to switch it on without migration). _(implemented)_
+4. ✅ **Evidence Blob:** consented private storage (`storage/blob.ts`, managed
+   identity or connection string), ownership-scoped reads, erasure via `DELETE /me`.
+   12-month retention = a Blob lifecycle rule (infra). _(implemented)_
+5. ⬜ **Frontend:** Google/Apple sign-in, account UI, case history, consent flows;
+   optional SWA/Vercel split. _(not started — out of current backend scope)_
+
+**Endpoints added (slices ③–④):** `GET /me`, `DELETE /me` (self-service erasure),
+`PUT /me/consent` (evidence-storage consent), `GET /cases`, `GET /cases/:id`,
+`POST /evidence`, `GET /evidence/:fileId`, `GET /reports/pending`,
+`POST /reports/:id/moderate`, and `DELETE /reports/:id` (admin moderation).
+All require a valid bearer token except public report submission; admin routes
+require the `admin` role and degrade to bounded in-memory behavior when Cosmos
+is unconfigured outside production.
+
+**AuthN vs AuthZ (explicit, least-privilege):** authentication (a valid Entra token)
+proves WHO the caller is; authorization decides what they may do.
+- **Self-service** actions (`DELETE /me`, `GET /cases`, evidence read/write) are scoped
+  to the caller's own `userId` — a user can only ever touch their OWN data; there is no
+  `userId` parameter to spoof.
+- **Destructive cross-user / shared-data** actions (`DELETE /reports/:id`) require the
+  **`admin` app-role** (`requireAdmin` → 403 otherwise). Roles come from the token's
+  `roles` claim ONLY — never from a `users` document — so DB tampering cannot escalate
+  privilege. Fails closed: with no admin assigned, no one can delete community data.
+- **Consent gate:** `POST /evidence` refuses (403) until the user has recorded explicit
+  consent via `PUT /me/consent` (POPIA lawful basis for evidence retention).
+
+**Provisioning still required to run these LIVE:** an Entra External ID tenant + app
+registration (set `AUTH_ISSUER`/`AUTH_AUDIENCE`), Google + Apple social connections in
+Entra, and a Storage account (`AZURE_STORAGE_ACCOUNT` + managed-identity RBAC, or a
+connection string). Until then the code is inert and the app runs exactly as before.
 
 ## 8. Decisions
 

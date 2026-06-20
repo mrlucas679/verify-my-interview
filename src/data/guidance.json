@@ -40,6 +40,14 @@
     "signal_ids": ["sms_reply_bait"]
   },
   {
+    "id": "fbi_money_mules",
+    "source": "FBI",
+    "title": "FBI — Money Mules",
+    "url": "https://www.fbi.gov/how-we-can-help-you/scams-and-safety/common-frauds-and-scams/money-mules",
+    "excerpt": "Criminals recruit people to receive, transfer, or move illegally acquired money. A job that asks a candidate to route funds through a personal account can expose them to money laundering and fraud liability.",
+    "signal_ids": ["money_mule_request"]
+  },
+  {
     "id": "ftc_phishing",
     "source": "FTC",
     "title": "FTC Consumer Advice — Recognizing Phishing",

@@ -16,21 +16,42 @@ import multer from 'multer';
 import { scamNetwork } from './network/scamNetwork';
 import { entityGraph } from './network/entityGraph';
 import { startEventConsumer } from './events/serviceBus';
+import { assertSecureConfig } from './config/security';
 import type { CaseContext, ChatMessage } from './agent/agents/conversationalAgent';
 import {
   LocalHttpError,
   MAX_LOCAL_EVIDENCE_CHARS,
   analyzeEvidenceLocal,
   chatLocal,
+  deleteAccountLocal,
+  deleteReportLocal,
+  getCaseLocal,
+  getEvidenceLocal,
+  getProfileLocal,
   getSharedReportLocal,
   healthSnapshot,
+  listPendingReportsLocal,
+  listCasesLocal,
+  moderateReportLocal,
   networkGraphLocal,
   networkStatsLocal,
+  recordCaseLocal,
   saveSharedReportLocal,
+  setConsentLocal,
+  storeEvidenceLocal,
   submitReportLocal,
   transcribeAudioLocal,
   uploadDocumentLocal,
 } from './local/appTools';
+import {
+  AuthedRequest,
+  attachIdentity,
+  commitAnalyzeAccess,
+  enforceAnalyzeAccess,
+  requireAdmin,
+  requireAuth,
+  rollbackAnalyzeAccess,
+} from './auth/middleware';
 import {
   auditLog,
   cleanString,
@@ -38,6 +59,7 @@ import {
   rateLimit,
   securityHeaders,
 } from './http/guard';
+import { maskForLogs } from './privacy/redaction';
 
 initAzureMonitor();
 
@@ -59,6 +81,9 @@ app.disable('etag');
 app.use(securityHeaders);
 app.use(auditLog);
 app.use(express.json({ limit: '1mb' }));
+// Verify a bearer token (if present) and attach req.identity. No-op when auth is
+// unconfigured — the API stays fully open + stateless exactly as before.
+app.use(attachIdentity);
 
 // Static web UI (served from <project root>/public)
 app.use(express.static(path.join(process.cwd(), 'public')));
@@ -70,9 +95,15 @@ const audioUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
 });
+// Consented evidence storage accepts images/PDFs and voice notes (25 MB cap).
+const evidenceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
 
 const MAX_CHAT_MESSAGES = 40;
 const MAX_CHAT_CONTENT = 4_000;
+const DEFAULT_ANALYZE_TIMEOUT_MS = 85_000;
 
 /** Map an error from the application core to a typed JSON HTTP response.
  *  LocalHttpError carries the intended client status; anything else is a 500. */
@@ -81,8 +112,64 @@ function sendError(res: Response, error: unknown, fallback: string): void {
     res.status(error.clientStatus).json({ error: error.message });
     return;
   }
-  console.error(fallback, error);
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`${fallback}: ${maskForLogs(message).slice(0, 300)}`);
   res.status(500).json({ error: fallback });
+}
+
+function analyzeTimeoutMs(): number {
+  const configured = Number(process.env.VMI_ANALYZE_TIMEOUT_MS);
+  if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_ANALYZE_TIMEOUT_MS;
+  return Math.max(5_000, Math.min(120_000, Math.floor(configured)));
+}
+
+function abortReason(signal: AbortSignal, fallback: string): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error(fallback);
+}
+
+function abortPromise<T>(signal: AbortSignal): Promise<T> {
+  return new Promise((_, reject) => {
+    if (signal.aborted) {
+      reject(abortReason(signal, 'Request aborted'));
+      return;
+    }
+    signal.addEventListener(
+      'abort',
+      () => reject(abortReason(signal, 'Request aborted')),
+      { once: true }
+    );
+  });
+}
+
+function createAnalyzeAbort(req: Request): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(
+      new LocalHttpError(
+        504,
+        'The investigation took too long. Try a shorter excerpt or run the check again.'
+      )
+    );
+  }, analyzeTimeoutMs());
+  timeout.unref?.();
+
+  const onClientAbort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(new LocalHttpError(408, 'The request was cancelled before the investigation finished.'));
+    }
+  };
+  req.on('aborted', onClientAbort);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      req.off('aborted', onClientAbort);
+    },
+  };
 }
 
 /**
@@ -133,20 +220,39 @@ app.post(
 app.post(
   '/analyze',
   rateLimit({ name: 'analyze', windowMs: 60_000, max: 10 }),
-  async (req: Request, res: Response) => {
+  enforceAnalyzeAccess,
+  async (req: AuthedRequest, res: Response) => {
+    const abort = createAnalyzeAbort(req);
+    let committed = false;
     try {
       const evidence = req.body?.evidence;
       if (typeof evidence !== 'string' || evidence.trim().length === 0) {
+        await rollbackAnalyzeAccess(req);
         return res.status(400).json({ error: 'Field "evidence" must be a non-empty string.' });
       }
       if (evidence.length > MAX_LOCAL_EVIDENCE_CHARS) {
+        await rollbackAnalyzeAccess(req);
         return res.status(400).json({
           error: `Evidence is too long (${evidence.length} chars). Limit is ${MAX_LOCAL_EVIDENCE_CHARS} — submit the relevant excerpt.`,
         });
       }
-      res.json(await analyzeEvidenceLocal(evidence));
+      const analysis = analyzeEvidenceLocal(evidence, undefined, { signal: abort.signal });
+      void analysis.catch(() => {});
+      const result = await Promise.race([analysis, abortPromise<Awaited<typeof analysis>>(abort.signal)]);
+      await commitAnalyzeAccess(req);
+      committed = true;
+      // Signed-in users get durable case history (best-effort, never blocks the
+      // response). evidenceIds links any files stored via POST /evidence.
+      if (req.identity) {
+        const evidenceIds = cleanStringArray(req.body?.evidenceIds, 20, 192);
+        void recordCaseLocal(req.identity.userId, result, evidenceIds).catch(() => {});
+      }
+      res.json(result);
     } catch (error) {
+      if (!committed) await rollbackAnalyzeAccess(req);
       sendError(res, error, 'Internal server error');
+    } finally {
+      abort.cleanup();
     }
   }
 );
@@ -213,7 +319,8 @@ app.post(
 /**
  * POST /report
  * Submit a scam to the scam-intelligence network. The report id is generated
- * server-side and the optional VMI_REPORT_API_KEY is enforced inside the core.
+ * server-side. In production VMI_REPORT_API_KEY is required unless public
+ * reports are explicitly allowed by configuration.
  */
 app.post(
   '/report',
@@ -224,6 +331,65 @@ app.post(
       res.status(201).json(result);
     } catch (error) {
       sendError(res, error, 'Failed to submit report');
+    }
+  }
+);
+
+/**
+ * DELETE /reports/:id
+ * Admin moderation — remove a false/abusive community report from the corpus.
+ * AUTHORIZATION: requires the admin app-role (requireAdmin); a plain signed-in
+ * user gets 403. Anyone deleting shared data must be an administrator.
+ */
+app.delete(
+  '/reports/:id',
+  rateLimit({ name: 'report', windowMs: 60_000, max: 20 }),
+  requireAdmin,
+  async (req: Request, res: Response) => {
+    try {
+      res.json(await deleteReportLocal(req.params.id));
+    } catch (error) {
+      sendError(res, error, 'Failed to delete report');
+    }
+  }
+);
+
+/**
+ * GET /reports/pending
+ * Admin moderation queue — public reports awaiting review. Pending reports are
+ * not part of the scam graph or Search index until approved.
+ */
+app.get(
+  '/reports/pending',
+  rateLimit({ name: 'report', windowMs: 60_000, max: 20 }),
+  requireAdmin,
+  async (_req: Request, res: Response) => {
+    try {
+      res.json(await listPendingReportsLocal());
+    } catch (error) {
+      sendError(res, error, 'Failed to load pending reports');
+    }
+  }
+);
+
+/**
+ * POST /reports/:id/moderate
+ * Admin moderation — approve moves a pending report into the intelligence graph;
+ * reject drops it from the queue.
+ */
+app.post(
+  '/reports/:id/moderate',
+  rateLimit({ name: 'report', windowMs: 60_000, max: 20 }),
+  requireAdmin,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      const action = req.body?.action;
+      if (action !== 'approve' && action !== 'reject') {
+        return res.status(400).json({ error: 'Field "action" must be "approve" or "reject".' });
+      }
+      res.json(await moderateReportLocal(req.params.id, action, req.identity?.userId));
+    } catch (error) {
+      sendError(res, error, 'Failed to moderate report');
     }
   }
 );
@@ -258,6 +424,141 @@ app.get(
       res.json({ result: await getSharedReportLocal(req.params.id) });
     } catch (error) {
       sendError(res, error, 'Failed to load shared report');
+    }
+  }
+);
+
+/**
+ * GET /me
+ * The signed-in user's profile + current-period usage. 401 when not signed in,
+ * 503 when accounts are unconfigured.
+ */
+app.get(
+  '/me',
+  rateLimit({ name: 'account', windowMs: 60_000, max: 60 }),
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      res.json(await getProfileLocal(req.identity!.userId));
+    } catch (error) {
+      sendError(res, error, 'Failed to load account');
+    }
+  }
+);
+
+/**
+ * DELETE /me
+ * POPIA right to erasure: delete the account, its cases + usage, and stored
+ * evidence. De-identified community reports are retained.
+ */
+app.delete(
+  '/me',
+  rateLimit({ name: 'account', windowMs: 60_000, max: 10 }),
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      res.json(await deleteAccountLocal(req.identity!.userId));
+    } catch (error) {
+      sendError(res, error, 'Failed to delete account');
+    }
+  }
+);
+
+/**
+ * PUT /me/consent
+ * Record the user's explicit consent to store evidence files (POPIA). Body:
+ * { store_evidence: boolean }. Required before POST /evidence will accept a file.
+ */
+app.put(
+  '/me/consent',
+  rateLimit({ name: 'account', windowMs: 60_000, max: 30 }),
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      if (typeof req.body?.store_evidence !== 'boolean') {
+        return res.status(400).json({ error: 'Field "store_evidence" (boolean) is required.' });
+      }
+      res.json(await setConsentLocal(req.identity!.userId, req.body.store_evidence));
+    } catch (error) {
+      sendError(res, error, 'Failed to update consent');
+    }
+  }
+);
+
+/**
+ * GET /cases
+ * The signed-in user's verification history (redacted snapshots only).
+ */
+app.get(
+  '/cases',
+  rateLimit({ name: 'account', windowMs: 60_000, max: 60 }),
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      res.json({ cases: await listCasesLocal(req.identity!.userId) });
+    } catch (error) {
+      sendError(res, error, 'Failed to load cases');
+    }
+  }
+);
+
+/**
+ * GET /cases/:id
+ * A single case snapshot owned by the signed-in user (404 otherwise).
+ */
+app.get(
+  '/cases/:id',
+  rateLimit({ name: 'account', windowMs: 60_000, max: 120 }),
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      res.json(await getCaseLocal(req.identity!.userId, req.params.id));
+    } catch (error) {
+      sendError(res, error, 'Failed to load case');
+    }
+  }
+);
+
+/**
+ * POST /evidence
+ * Store a consented evidence file (image/PDF/voice note) for the signed-in user.
+ * Magic-byte sniffed + size capped inside the core; returns an evidenceId to pass
+ * to POST /analyze. 503 when evidence storage is unconfigured.
+ */
+app.post(
+  '/evidence',
+  rateLimit({ name: 'evidence', windowMs: 60_000, max: 20 }),
+  requireAuth,
+  evidenceUpload.single('file'),
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      const file = (req as AuthedRequest & { file?: { buffer: Buffer } }).file;
+      if (!file) return res.status(400).json({ error: 'file is required' });
+      res.status(201).json(await storeEvidenceLocal(req.identity!.userId, file.buffer));
+    } catch (error) {
+      sendError(res, error, 'Failed to store evidence');
+    }
+  }
+);
+
+/**
+ * GET /evidence/:fileId
+ * Download the signed-in user's own evidence file (API-proxied; ownership scoped
+ * by the userId prefix, so one user can never read another's evidence).
+ */
+app.get(
+  '/evidence/:fileId',
+  rateLimit({ name: 'evidence', windowMs: 60_000, max: 60 }),
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    try {
+      const evidenceId = `${req.identity!.userId}/${req.params.fileId}`;
+      const { buffer, contentType } = await getEvidenceLocal(req.identity!.userId, evidenceId);
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', 'inline');
+      res.send(buffer);
+    } catch (error) {
+      sendError(res, error, 'Failed to load evidence');
     }
   }
 );
@@ -311,15 +612,23 @@ app.get('/docs', (_req: Request, res: Response) => {
     service: 'Verify My Interview',
     version: '0.1.0',
     endpoints: {
-      'POST /analyze': 'Submit evidence for fraud investigation (returns report + trace + case subgraph)',
-      'POST /chat': 'Converse with the case-aware detective',
+      'POST /analyze': 'Submit evidence for fraud investigation (returns report + trace + signals + similar reports)',
+      'POST /chat': 'Continue a case-aware detective conversation',
       'POST /transcribe': 'Transcribe a voice recording (Azure AI Speech) for investigation',
       'POST /upload': 'OCR a document/screenshot via Azure Document Intelligence',
-      'POST /report': 'Submit a scam report to the intelligence network',
+      'POST /report': 'Submit a de-identified scam report',
+      'GET /reports/pending': 'Admin only — list public reports awaiting moderation',
+      'POST /reports/:id/moderate': 'Admin only — approve/reject a pending public report',
       'POST /share': 'Save a finished report result for sharing (returns an id)',
       'GET /shared/:id': 'Load a previously shared report result',
-      'GET /network/graph': 'Scam-intelligence entity graph (?type=&minTrust=)',
-      'GET /network/stats': 'Threat statistics over the report corpus',
+      'GET /me': 'Signed-in user profile + usage (Bearer token; Google/Apple via Entra)',
+      'DELETE /me': 'Delete account + cases + stored evidence (POPIA erasure)',
+      'PUT /me/consent': 'Set evidence-storage consent ({ store_evidence: boolean })',
+      'DELETE /reports/:id': 'Admin only — remove a community report (moderation)',
+      'GET /cases': 'Signed-in user verification history',
+      'GET /cases/:id': 'A single case snapshot',
+      'POST /evidence': 'Store a consented evidence file (returns evidenceId)',
+      'GET /evidence/:fileId': 'Download own stored evidence (API-proxied)',
       'GET /health': 'Health check with subsystem status',
       'GET /docs': 'API documentation',
     },
@@ -354,7 +663,8 @@ app.use((err: any, req: Request, res: Response, _next: any) => {
     // Wrong/extra multipart field etc. — a malformed request, not an oversized one.
     return res.status(400).json({ error: 'Upload rejected.' });
   }
-  console.error('Unhandled error:', err);
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`Unhandled error: ${maskForLogs(message).slice(0, 300)}`);
   res.status(500).json({
     error: 'Internal server error',
     message: process.env.NODE_ENV === 'development' ? err.message : undefined,
@@ -363,6 +673,15 @@ app.use((err: any, req: Request, res: Response, _next: any) => {
 
 // Start server
 if (require.main === module) {
+  // Fail fast in production: refuse to boot with a silently-insecure config
+  // (missing trust-proxy, auth, durable store, or anon-trial salt). No-op in dev;
+  // ALLOW_INSECURE=1 downgrades to warnings. This is the network runtime only.
+  try {
+    assertSecureConfig();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   app.listen(PORT, () => {
     console.log(`[Server] Verify My Interview API listening on port ${PORT}`);
     console.log(`[Server] Health check: http://localhost:${PORT}/health`);

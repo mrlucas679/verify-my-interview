@@ -13,7 +13,8 @@ import { entityGraph } from '../../network/entityGraph';
 import { NetworkMatch, TrustLevel } from '../../network/types';
 import { NetworkAgentResult } from '../types';
 
-const HARD_REASON = /Shared|Same recruiter|Same impersonated|Same payment|Same phone/;
+const HARD_REASON = /Shared|Same recruiter|Same payment|Same phone/;
+const SEMANTIC_SIGNAL_THRESHOLD = 0.78;
 
 const TRUST_POINTS: Record<TrustLevel, number> = {
   unverified: 6,
@@ -22,17 +23,30 @@ const TRUST_POINTS: Record<TrustLevel, number> = {
   trusted: 28,
 };
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  throw reason instanceof Error ? reason : new Error('Network analysis aborted');
+}
+
 export class NetworkAgent {
-  async run(evidence: string, entities: Entities): Promise<NetworkAgentResult> {
+  async run(
+    evidence: string,
+    entities: Entities,
+    signal?: AbortSignal
+  ): Promise<NetworkAgentResult> {
     // Semantic + entity matching against the indexed corpus (no-op when Azure off).
     // Engine stays 'deterministic' — vector search is computation, not LLM reasoning.
     let matches: NetworkMatch[] = [];
     if (scamNetwork.enabled) {
-      matches = await scamNetwork.search(evidence, entities);
+      throwIfAborted(signal);
+      matches = await scamNetwork.search(evidence, entities, 4, signal);
     }
+    throwIfAborted(signal);
 
     // Structural matching against the entity graph (always available).
     const graph = await entityGraph.caseSubgraph(entities, evidence);
+    throwIfAborted(signal);
     const linkedReports = graph.nodes.filter(
       (n) => n.type === 'report' && n.id !== 'report:case-current'
     );
@@ -72,40 +86,45 @@ export class NetworkAgent {
     const linked = result.graph.nodes.filter(
       (n) => n.type === 'report' && n.id !== 'report:case-current'
     );
-    if (linked.length) {
-      const best = linked.reduce<TrustLevel>((acc, n) => {
+    const trustedLinked = linked.filter((n) => (n.trust ?? 'unverified') !== 'unverified');
+    const linkedForSignal = trustedLinked;
+    if (linkedForSignal.length) {
+      const best = linkedForSignal.reduce<TrustLevel>((acc, n) => {
         const t = n.trust ?? 'unverified';
         return TRUST_POINTS[t] > TRUST_POINTS[acc] ? t : acc;
       }, 'unverified');
       signals.push({
         id: 'network_infrastructure_match',
-        label: `Shares identifiers with ${linked.length} earlier scam report${linked.length > 1 ? 's' : ''}`,
+        label: `Shares identifiers with ${linkedForSignal.length} earlier scam report${linkedForSignal.length > 1 ? 's' : ''}`,
         category: 'red',
         points: TRUST_POINTS[best],
         evidence: {
           source: 'entity_graph',
-          detail: `${linked
+          detail: `${linkedForSignal
             .slice(0, 3)
             .map((n) => `${n.label}${n.trust ? ` [${n.trust}]` : ''}`)
-            .join(', ')}${linked.length > 3 ? ` +${linked.length - 3} more` : ''} share this case's domains/emails/phones/payment handles`,
+            .join(', ')}${linkedForSignal.length > 3 ? ` +${linkedForSignal.length - 3} more` : ''} share this case's domains/emails/phones/payment handles`,
         },
       });
     }
 
     // Semantic-only matches (no structural link) are a weaker signal.
     const strongSemantic = result.matches.filter(
-      (m) => m.similarity >= 0.55 || m.reasons.some((r) => HARD_REASON.test(r))
+      (m) => m.similarity >= SEMANTIC_SIGNAL_THRESHOLD || m.reasons.some((r) => HARD_REASON.test(r))
     );
-    if (!linked.length && strongSemantic.length) {
-      const top = strongSemantic[0];
+    const semanticForSignal = strongSemantic.filter(
+      (m) => (m.trustLevel ?? 'unverified') !== 'unverified' || strongSemantic.length >= 2
+    );
+    if (!linked.length && semanticForSignal.length) {
+      const top = semanticForSignal[0];
       const hard = top.reasons.some((r) => HARD_REASON.test(r));
       // Independent matches corroborate each other: scale points with the
       // match count (capped) so 4 known-scam lookalikes never read "Low Risk".
       const base = hard ? 20 : 12;
-      const points = Math.min(hard ? 30 : 26, base + 4 * (strongSemantic.length - 1));
+      const points = Math.min(hard ? 30 : 26, base + 4 * (semanticForSignal.length - 1));
       signals.push({
         id: 'network_match',
-        label: `Resembles ${strongSemantic.length} prior reported scam${strongSemantic.length > 1 ? 's' : ''}`,
+        label: `Resembles ${semanticForSignal.length} prior reported scam${semanticForSignal.length > 1 ? 's' : ''}`,
         category: 'red',
         points,
         evidence: {

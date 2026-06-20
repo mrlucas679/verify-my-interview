@@ -1,4 +1,4 @@
-import type { AnalyzeResponse } from './types';
+import type { AnalyzeResponse, RiskLevel, TrustLevel } from './types';
 
 export class ApiError extends Error {
   constructor(
@@ -16,8 +16,37 @@ interface RequestOptions {
   signal?: AbortSignal;
 }
 
+interface AnalyzeOptions extends RequestOptions {
+  evidenceIds?: string[];
+}
+
+// ── Auth token injection (pluggable) ─────────────────────────────────────────
+// The auth layer (Phase 4, MSAL/Entra) registers a provider here; until then no
+// provider is set and requests go out unauthenticated exactly as today. Keeping
+// this indirection means the API client has zero hard dependency on MSAL, so the
+// anonymous flow and offline build are unaffected.
+type TokenProvider = () => Promise<string | null> | string | null;
+let authTokenProvider: TokenProvider | null = null;
+
+export function setAuthTokenProvider(provider: TokenProvider | null): void {
+  authTokenProvider = provider;
+}
+
+async function authHeader(): Promise<Record<string, string>> {
+  if (!authTokenProvider) return {};
+  try {
+    const token = await authTokenProvider();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    // Token acquisition failed → fall back to anonymous; the server decides.
+    return {};
+  }
+}
+
 const ROUTE_TIMEOUT_MS = {
+  account: 20_000,
   chat: 30_000,
+  evidence: 45_000,
   upload: 75_000,
   transcribe: 130_000,
   analyze: 90_000,
@@ -35,6 +64,55 @@ export interface CaseContext {
   case_summary: string;
   red_flags: string[];
   matches: Array<{ reportId: string; scamType: string; similarity: number }>;
+}
+
+export interface AccountProfile {
+  user: {
+    id: string;
+    email?: string;
+    name?: string;
+    provider?: string;
+    plan: 'free';
+    consent: { store_evidence: boolean; at: string };
+  };
+  usage: { period: string; count: number };
+}
+
+export interface ServerCase {
+  _id: string;
+  userId?: string;
+  createdAt: string;
+  riskLevel: RiskLevel;
+  riskScore: number;
+  caseSummary: string;
+  evidenceIds: string[];
+  result?: AnalyzeResponse;
+}
+
+export interface PendingReport {
+  _id: string;
+  reportId: string;
+  companyName: string;
+  aliases?: string[];
+  scamType: string;
+  description: string;
+  domains: string[];
+  emails: string[];
+  phones?: string[];
+  paymentHandles?: string[];
+  location: string;
+  reportedAt: string;
+  sourceType: string;
+  trustLevel: TrustLevel;
+  status: 'pending_review';
+  submittedAt: string;
+}
+
+export interface ModerateReportResult {
+  ok: true;
+  reportId: string;
+  action: 'approved' | 'rejected';
+  indexed: boolean;
 }
 
 function timeoutMessage(path: string): string {
@@ -75,7 +153,8 @@ async function fetchJson<T>(
   signal?.addEventListener('abort', abort, { once: true });
 
   try {
-    const res = await fetch(path, { ...init, signal: controller.signal });
+    const headers = { ...(init.headers as Record<string, string> | undefined), ...(await authHeader()) };
+    const res = await fetch(path, { ...init, headers, signal: controller.signal });
     if (!res.ok) throw await errorFromResponse(res, `${path} failed (${res.status})`);
     return (await res.json()) as T;
   } catch (error) {
@@ -133,18 +212,57 @@ export async function transcribeAudio(
 
 export async function analyze(
   evidence: string,
-  options: RequestOptions = {}
+  options: AnalyzeOptions = {}
 ): Promise<AnalyzeResponse> {
+  const evidenceIds = options.evidenceIds?.filter(Boolean).slice(0, 20);
   return fetchJson(
     '/analyze',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ evidence }),
+      body: JSON.stringify(evidenceIds?.length ? { evidence, evidenceIds } : { evidence }),
     },
     ROUTE_TIMEOUT_MS.analyze,
     options.signal
   );
+}
+
+export async function getProfile(options: RequestOptions = {}): Promise<AccountProfile> {
+  return fetchJson('/me', { method: 'GET' }, ROUTE_TIMEOUT_MS.account, options.signal);
+}
+
+export async function setEvidenceConsent(
+  storeEvidence: boolean,
+  options: RequestOptions = {}
+): Promise<{ consent: AccountProfile['user']['consent'] }> {
+  return fetchJson(
+    '/me/consent',
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ store_evidence: storeEvidence }),
+    },
+    ROUTE_TIMEOUT_MS.account,
+    options.signal
+  );
+}
+
+export async function deleteAccount(options: RequestOptions = {}): Promise<{ ok: true }> {
+  return fetchJson('/me', { method: 'DELETE' }, ROUTE_TIMEOUT_MS.account, options.signal);
+}
+
+export async function listCases(options: RequestOptions = {}): Promise<{ cases: ServerCase[] }> {
+  return fetchJson('/cases', { method: 'GET' }, ROUTE_TIMEOUT_MS.account, options.signal);
+}
+
+export async function getCase(id: string, options: RequestOptions = {}): Promise<ServerCase> {
+  return fetchJson(`/cases/${encodeURIComponent(id)}`, { method: 'GET' }, ROUTE_TIMEOUT_MS.account, options.signal);
+}
+
+export async function storeEvidence(file: File, options: RequestOptions = {}): Promise<{ evidenceId: string }> {
+  const fd = new FormData();
+  fd.append('file', file);
+  return fetchJson('/evidence', { method: 'POST', body: fd }, ROUTE_TIMEOUT_MS.evidence, options.signal);
 }
 
 /**
@@ -191,16 +309,12 @@ export interface ScamReportInput {
   location?: string;
 }
 
-/**
- * File a community scam report (POST /report). The report is added to the
- * scam-intelligence network so the next person who checks this recruiter's
- * infrastructure sees the match. Server redacts sensitive identifiers and
- * keeps only scam IOCs.
- */
+/** File a scam report (POST /report). Server redacts sensitive identifiers and
+ * keeps only scam IOCs that can help future checks. */
 export async function submitReport(
   input: ScamReportInput,
   options: RequestOptions = {}
-): Promise<{ ok: boolean; reportId: string }> {
+): Promise<{ ok: boolean; reportId: string; indexed: boolean; status: 'pending_review' | 'indexed' }> {
   return fetchJson(
     '/report',
     {
@@ -209,6 +323,27 @@ export async function submitReport(
       body: JSON.stringify(input),
     },
     30_000,
+    options.signal
+  );
+}
+
+export async function listPendingReports(options: RequestOptions = {}): Promise<{ reports: PendingReport[] }> {
+  return fetchJson('/reports/pending', { method: 'GET' }, ROUTE_TIMEOUT_MS.account, options.signal);
+}
+
+export async function moderateReport(
+  reportId: string,
+  action: 'approve' | 'reject',
+  options: RequestOptions = {}
+): Promise<ModerateReportResult> {
+  return fetchJson(
+    `/reports/${encodeURIComponent(reportId)}/moderate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    },
+    ROUTE_TIMEOUT_MS.account,
     options.signal
   );
 }

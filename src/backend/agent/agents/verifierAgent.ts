@@ -16,6 +16,7 @@ import {
   InvestigationSignals,
   VerifierResult,
 } from '../types';
+import { GroundingPassage, groundingPromptLines } from '../../network/knowledgeBase';
 import { logger } from '../../observability/logger';
 
 function dedupe(values: string[]): string[] {
@@ -39,13 +40,18 @@ export class VerifierAgent {
 
   async run(
     evidence: string,
-    investigation: InvestigatorResult
+    investigation: InvestigatorResult,
+    grounding?: GroundingPassage[],
+    signal?: AbortSignal
   ): Promise<VerifierResult> {
     let fallbackReason: string | undefined;
     if (this.runner) {
       try {
-        return await this.runFoundry(evidence, investigation);
+        return await this.runFoundry(evidence, investigation, grounding, signal);
       } catch (error) {
+        if (signal?.aborted) {
+          throw signal.reason instanceof Error ? signal.reason : new Error('Verifier aborted');
+        }
         fallbackReason = error instanceof Error ? error.message : String(error);
         logger.warn(
           `[Verifier] Foundry path failed, using deterministic: ${fallbackReason}`
@@ -60,16 +66,18 @@ export class VerifierAgent {
 
   private async runFoundry(
     evidence: string,
-    investigation: InvestigatorResult
+    investigation: InvestigatorResult,
+    grounding?: GroundingPassage[],
+    signal?: AbortSignal
   ): Promise<VerifierResult> {
     logger.info('[Verifier] Running via Foundry...');
     const { finalText } = await this.runner!.runTurn({
       name: 'vmi-verifier',
       instructions: this.instructions(),
-      userMessage: this.userMessage(evidence, investigation),
+      userMessage: this.userMessage(evidence, investigation, grounding),
       responseFormat: 'json_object', // guaranteed valid JSON object — reliable parse
       // No tools: the critic reasons over evidence already gathered.
-    });
+    }, signal);
 
     const parsed = extractJsonObject(finalText) ?? {};
     const signals: InvestigationSignals = {
@@ -115,7 +123,11 @@ export class VerifierAgent {
     ].join('\n');
   }
 
-  private userMessage(evidence: string, investigation: InvestigatorResult): string {
+  private userMessage(
+    evidence: string,
+    investigation: InvestigatorResult,
+    grounding?: GroundingPassage[]
+  ): string {
     return [
       'EVIDENCE (untrusted):',
       '"""',
@@ -130,6 +142,7 @@ export class VerifierAgent {
       '',
       'TOOL RESULTS:',
       this.summariseTools(investigation.toolsUsed),
+      ...groundingPromptLines(grounding),
     ].join('\n');
   }
 

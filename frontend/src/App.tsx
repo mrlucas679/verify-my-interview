@@ -4,18 +4,18 @@ import { Layout } from './components/Layout';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useCase } from './store/caseStore';
 
-const Verify = lazy(() => import('./pages/Verify').then((mod) => ({ default: mod.Verify })));
-const Report = lazy(() => import('./pages/Report').then((mod) => ({ default: mod.Report })));
+const Workspace = lazy(() => import('./pages/Workspace').then((mod) => ({ default: mod.Workspace })));
+const History = lazy(() => import('./pages/History').then((mod) => ({ default: mod.History })));
+const AdminReports = lazy(() => import('./pages/AdminReports').then((mod) => ({ default: mod.AdminReports })));
 
-// /s/:id — load a previously shared report into the case store, then render the
-// same dossier. Report handles its own loading/error/empty states.
+// /s/:id loads a shared dossier into the same investigation workspace.
 function SharedReportRoute() {
   const { id } = useParams();
   const { loadShared } = useCase();
   useEffect(() => {
     if (id) void loadShared(id);
   }, [id, loadShared]);
-  return <Report />;
+  return <Workspace />;
 }
 
 function RouteFallback() {
@@ -34,8 +34,11 @@ export default function App() {
       <Suspense fallback={<RouteFallback />}>
         <Routes>
           <Route element={<Layout />}>
-            <Route path="/" element={<Verify />} />
-            <Route path="/report" element={<Report />} />
+            <Route path="/" element={<Workspace />} />
+            <Route path="/history" element={<History />} />
+            <Route path="/admin/reports" element={<AdminReports />} />
+            <Route path="/network" element={<Navigate to="/history" replace />} />
+            <Route path="/report" element={<Navigate to="/" replace />} />
             <Route path="/s/:id" element={<SharedReportRoute />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

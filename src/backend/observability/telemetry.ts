@@ -2,6 +2,7 @@ import { Span, SpanStatusCode, trace } from '@opentelemetry/api';
 import { AzureMonitorOpenTelemetryOptions, useAzureMonitor } from '@azure/monitor-opentelemetry';
 
 import type { AnalysisResult } from '../agent/orchestrator';
+import { maskForLogs } from '../privacy/redaction';
 
 type TelemetryValue = string | number | boolean;
 type TelemetryAttributes = Record<string, TelemetryValue>;
@@ -84,7 +85,9 @@ export async function withTelemetrySpan<T>(
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
     } catch (error) {
-      const captured = error instanceof Error ? error : new Error(String(error));
+      const raw = error instanceof Error ? error.message : String(error);
+      const captured = new Error(maskForLogs(raw).slice(0, MAX_ATTRIBUTE_TEXT));
+      captured.name = error instanceof Error ? error.name : 'Error';
       span.recordException(captured);
       span.setStatus({ code: SpanStatusCode.ERROR, message: captured.message });
       throw error;

@@ -47,12 +47,25 @@ const SCRUBBED_ENV = [
   'VMI_TELEMETRY_DISABLED',
   // Data layer — scrubbed so offline evals never touch Cosmos and stay deterministic.
   'COSMOS_CONNECTION_STRING',
+  'COSMOS_PII_CONNECTION_STRING',
   'COSMOS_DB',
   'COSMOS_SHARE_TTL_DAYS',
+  'COSMOS_CASE_RETENTION_DAYS',
   // Link unwrapping (network) + event backbone — scrubbed so offline stays deterministic.
   'URL_UNWRAP_ENABLED',
   'SERVICEBUS_CONNECTION_STRING',
   'SERVICEBUS_QUEUE',
+  // Accounts / auth (Entra External ID) + evidence storage — scrubbed so the
+  // offline pipeline never enables accounts, metering, or Blob writes.
+  'AUTH_ISSUER',
+  'AUTH_AUDIENCE',
+  'AUTH_JWKS_URI',
+  'AUTH_ANON_TRIAL_MAX',
+  'AUTH_ANON_TRIAL_DAYS',
+  'AUTH_ANON_SALT',
+  'AUTH_ADMIN_EMAILS',
+  'AZURE_STORAGE_ACCOUNT',
+  'AZURE_STORAGE_CONNECTION_STRING',
 ];
 
 export interface EvalCaseFile {

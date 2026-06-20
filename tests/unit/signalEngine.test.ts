@@ -40,4 +40,37 @@ describe('deriveSignals — channel-aware domain signals', () => {
     expect(signals.map((signal) => signal.id)).toContain('official_domain_match');
     expect(signals.map((signal) => signal.id)).not.toContain('no_mx_records');
   });
+
+  it('trusts email deliverability enrichment when DNS returns no MX records', () => {
+    const toolsUsed: AgentToolCall[] = [
+      {
+        tool: 'lookup_domain_rdap',
+        input: { domain: 'contoso.com', email: 'recruiter@contoso.com' },
+        result: {
+          tool: 'lookup_domain_rdap',
+          success: true,
+          data: {
+            domain: 'contoso.com',
+            mx_valid: true,
+            whois_data: { age_days: 10_000 },
+            dns_records: { MX: [] },
+          },
+        },
+      },
+    ];
+    const entities: Entities = {
+      ...cleanEntities,
+      domains: ['contoso.com'],
+      emails: ['recruiter@contoso.com'],
+    };
+
+    const signals = deriveSignals(
+      'Recruiter email: recruiter@contoso.com. No payment is required.',
+      entities,
+      toolsUsed
+    );
+
+    expect(signals.map((signal) => signal.id)).toContain('has_mx');
+    expect(signals.map((signal) => signal.id)).not.toContain('no_mx_records');
+  });
 });

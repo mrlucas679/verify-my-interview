@@ -14,7 +14,11 @@ import { AgentToolCall, ResearchAgentResult } from '../types';
 export class ResearchAgent {
   constructor(private readonly tools: ToolOrchestrator) {}
 
-  async run(entities: Entities, priorToolCalls: AgentToolCall[]): Promise<ResearchAgentResult> {
+  async run(
+    entities: Entities,
+    priorToolCalls: AgentToolCall[],
+    signal?: AbortSignal
+  ): Promise<ResearchAgentResult> {
     const company = entities.companies[0];
     if (!webResearchEnabled()) {
       return {
@@ -41,20 +45,19 @@ export class ResearchAgent {
         company,
         role: entities.job_titles[0],
         domain: entities.domains[0],
-      });
+      }, signal);
       call = { tool: 'research_company_web', input: { company }, result };
     }
 
     const findings: Finding[] = [];
     const data = call.result.success ? call.result.data : undefined;
     if (data) {
-      const cite = (i = 0) => data.citations?.[i] ?? 'web search';
       if (data.official_listing_found ?? data.officialListingFound) {
         findings.push({
           claim: `A public job listing was found for ${company}`,
           evidence: 'Careers or job result found in public search',
           confidence: 0.7,
-          source: data.official_listing_url ?? cite(),
+          source: 'research_company_web',
         });
       }
       if (data.scam_mentions ?? data.scamMentions) {
@@ -62,7 +65,7 @@ export class ResearchAgent {
           claim: `Public complaints mention "${company}" recruiting`,
           evidence: 'Search results contain scam, fraud, or complaint language for this company',
           confidence: 0.75,
-          source: data.scam_mention_url ?? cite(),
+          source: 'research_company_web',
         });
       }
       if (findings.length === 0) {

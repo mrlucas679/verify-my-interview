@@ -10,24 +10,43 @@ The guiding principle is already in the architecture and must not regress:
 claim cites a source.** Hardening makes that pipeline grounded, safe, measured,
 and operable — it does not move scoring into the model.
 
-## Submission status (2026-06-12)
+## Launch status (2026-06-18)
 
-All verification gates are represented by `npm run verify:product`: backend +
-frontend build, eslint 0 errors, frontend TypeScript check, Jest, offline evals
-**13/13** (deterministic), agent stress harness **13/13**, and production
-dependency audits for the root and frontend packages. UI is the final two-page IA (verify slot → layered
-investigation dossier) with an app-level error boundary.
+The app has moved from the hackathon two-page demo shape to the current
+AI-first product shape:
 
-Accepted, documented residual risks:
-- Frontend `npm audit`: 2 moderate advisories in **esbuild/vite** — both
-  affect the *dev server only* (dev request exposure; optimized-deps `.map`
-  path traversal). Production serves Vite's static build output from Express;
-  the dev server never runs in production. Fixing requires a Vite major bump —
-  deferred past submission.
-- Live-run items before final submission: seed the `scam-reports-v2` index once,
-  restart shell so `DefaultAzureCredential` finds `az`, browser check of
-  MediaRecorder webm/opus against Fast Transcription (WAV path verified live),
-  record the demo video, and paste the final links into the submission form.
+- `/` is the single Investigation Workspace with one multimodal composer for
+  pasted evidence, files, voice, check mode, and report mode.
+- Verify results render as stacked investigation cards.
+- Report mode returns an acknowledgment/reference id only.
+- `/history` replaces the old community/network screen.
+- `/network` redirects to `/history`.
+- The public frontend graph UI and `react-force-graph-2d` dependency are gone;
+  prior report matches now render as plain "Similar reports" cards.
+
+Latest local gates on 2026-06-18:
+
+- `npm --prefix frontend run typecheck`: pass.
+- `npm run build`: pass.
+- `npm run lint`: pass.
+- `npm test`: pass, 119/119.
+- `npm run eval`: pass, 13/13.
+- `npm run stress:agents`: pass, 13/13.
+- `npm --prefix frontend audit --omit=dev`: pass, 0 vulnerabilities.
+
+Known launch caveats:
+
+- Root `npm audit --omit=dev` reports the existing OpenTelemetry advisory through
+  `@azure/monitor-opentelemetry`. `npm audit fix --force` would install a
+  breaking Azure Monitor package version, so this requires an explicit
+  dependency decision.
+- `npm run azure:doctor -- --require-live` is not ready in the current terminal:
+  `APPLICATIONINSIGHTS_CONNECTION_STRING` is missing, Azure CLI is unavailable
+  or not logged in, and Azure Search is not configured in the process.
+- Public beta still requires the P1 launch blockers in
+  [`LIVE_LAUNCH_CHECKLIST.md`](LIVE_LAUNCH_CHECKLIST.md): sign-in UI, quotas,
+  privacy notice/consent, production telemetry, durable storage configuration,
+  and live smoke tests against the deployed URL.
 
 ---
 

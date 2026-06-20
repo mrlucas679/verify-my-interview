@@ -32,7 +32,7 @@ export class CompanyVerificationService {
     name?: string;
     regNum?: string;
     country?: string;
-  }): Promise<CompanyVerificationResult> {
+  }, signal?: AbortSignal): Promise<CompanyVerificationResult> {
     const cacheKey = JSON.stringify(input);
 
     // Check cache
@@ -48,7 +48,7 @@ export class CompanyVerificationService {
 
       // Primary: lookup by registration number
       if (input.regNum && input.country) {
-        const result = await this.lookupByRegNum(input.regNum, input.country);
+        const result = await this.lookupByRegNum(input.regNum, input.country, signal);
         if (result) {
           this.setCache(cacheKey, result);
           return result;
@@ -57,7 +57,7 @@ export class CompanyVerificationService {
 
       // Fallback: lookup by name
       if (input.name && input.country) {
-        const result = await this.lookupByName(input.name, input.country);
+        const result = await this.lookupByName(input.name, input.country, signal);
         if (result) {
           this.setCache(cacheKey, result);
           return result;
@@ -75,20 +75,22 @@ export class CompanyVerificationService {
 
   private async request<T>(
     url: string,
-    params: Record<string, string>
+    params: Record<string, string>,
+    signal?: AbortSignal
   ): Promise<{ status: number; data?: T }> {
     let lastError: Error | null = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const response = await axios.get<T>(url, {
           params,
+          signal,
           timeout: this.REQUEST_TIMEOUT_MS,
           validateStatus: (status) => status < 500 || status === 429,
         });
         if (response.status === 429 || response.status >= 500) {
           lastError = new Error(`Company registry temporarily unavailable (${response.status})`);
           if (attempt < 2) {
-            await this.wait(250 + Math.floor(Math.random() * 250));
+            await this.wait(250 + Math.floor(Math.random() * 250), signal);
             continue;
           }
           throw lastError;
@@ -100,7 +102,7 @@ export class CompanyVerificationService {
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('Company registry request failed');
         if (attempt === 2 || !this.isRetryable(error)) break;
-        await this.wait(250 + Math.floor(Math.random() * 250));
+        await this.wait(250 + Math.floor(Math.random() * 250), signal);
       }
     }
     throw lastError ?? new Error('Company registry provider unavailable');
@@ -112,8 +114,22 @@ export class CompanyVerificationService {
     return !status || status === 429 || status >= 500;
   }
 
-  private wait(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private wait(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(signal.reason instanceof Error ? signal.reason : new Error('Company registry request aborted'));
+        return;
+      }
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(signal?.reason instanceof Error ? signal.reason : new Error('Company registry request aborted'));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
   }
 
   private setCache(cacheKey: string, data: CompanyVerificationResult): void {
@@ -125,11 +141,16 @@ export class CompanyVerificationService {
     this.cache.set(cacheKey, { data, timestamp: Date.now() });
   }
 
-  private async lookupByRegNum(regNum: string, country: string): Promise<CompanyVerificationResult | null> {
+  private async lookupByRegNum(
+    regNum: string,
+    country: string,
+    signal?: AbortSignal
+  ): Promise<CompanyVerificationResult | null> {
     try {
       const response = await this.request<any>(
         `https://api.opencorporates.com/v0.4/companies/${country}/${regNum}`,
-        { api_token: this.apiKey }
+        { api_token: this.apiKey },
+        signal
       );
       if (response.status === 404 || response.status >= 400 || !response.data) return null;
 
@@ -152,11 +173,16 @@ export class CompanyVerificationService {
     }
   }
 
-  private async lookupByName(name: string, country: string): Promise<CompanyVerificationResult | null> {
+  private async lookupByName(
+    name: string,
+    country: string,
+    signal?: AbortSignal
+  ): Promise<CompanyVerificationResult | null> {
     try {
       const response = await this.request<any>(
         `https://api.opencorporates.com/v0.4/companies/search`,
-        { q: name, jurisdiction_code: country, api_token: this.apiKey }
+        { q: name, jurisdiction_code: country, api_token: this.apiKey },
+        signal
       );
       if (response.status >= 400 || !response.data) return null;
 
