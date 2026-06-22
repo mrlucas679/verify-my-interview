@@ -1,12 +1,13 @@
 # Investigation Workspace — End-to-End Implementation Plan
 
-Status: **PLAN** · 2026-06-18 · Owner: design+frontend (delegated full control by user)
+Status: **IMPLEMENTED / SUPERSEDED BY LIVE WORKSPACE** · 2026-06-18 · Owner:
+design+frontend (delegated full control by user)
 Branch: `integration/combined-20260612` (main untouched until explicitly told)
 
-Collapses the split `/` (Verify) and `/report` (dossier) into ONE AI-first
-**Investigation Workspace**: a single multimodal composer that grows a vertical
-stack of **intelligence cards**. Research + rationale: `.claude/orchestrator/research/
-investigation-workspace-ux.md`. This doc is the build contract.
+The split `/` (Verify) and `/report` (dossier) flow has been collapsed into ONE
+AI-first **Investigation Workspace**. The public product now has a simple
+workspace plus History. The scam-intelligence graph/network remains an internal
+matching layer, not a page users need to understand.
 
 ## 0. Principles this plan is held to (non-negotiable)
 - **Sentinel design** (`sentinel-ui`) + **impeccable-design** quality bar. No emojis,
@@ -24,15 +25,15 @@ investigation-workspace-ux.md`. This doc is the build contract.
 | Route | Purpose | Notes |
 |---|---|---|
 | `/` | Investigation Workspace (empty → active) | replaces Verify + Report pages |
-| `/c/:caseId` | A persisted case thread (signed-in) | Phase 5; deep-linkable |
+| `/history` | Past checks and signed-in case snapshots | replaces the old Network/community surface |
 | `/s/:id` | Public shared result (read-only) | exists; reuse |
-| `/network` | Intelligence Network (graph + stats) | exists; promote to its own route |
-| `/admin/review` | Moderator report queue | Phase 6; `requireAdmin` |
-| `/settings` | Account, consent, privacy, erasure | Phase 4 |
-| `*` | redirect → `/` | old `/report` 301s into `/` |
+| `/admin/reports` | Moderator report queue | `requireAdmin` |
+| `/privacy` and `/terms` | POPIA notice and product terms | public, plain language |
+| `/network` | Redirects to `/history` | old links do not expose graph UI |
+| `*` | redirect → `/` | old `/report` redirects into `/` |
 
-Top nav (`Layout.tsx`): logo · **New Case** · Network · [signed-in: History · account menu]
-· [admin: Review]. Footer: privacy/POPIA + status.
+Top nav (`Layout.tsx`): logo · **New check** · History · [signed-in: account
+menu] · [admin: Reports]. Footer: privacy + terms.
 
 ## 2. Screen anatomy
 ### 2.1 Empty / first-run state
@@ -77,7 +78,6 @@ reveal only (Sentinel rule). Card types (reuse existing components as the body):
 | Network matches (similar reported scams) | `NetworkMatches` | collapsed |
 | Official guidance citations | `GuidanceCitations` | collapsed |
 | Evidence & entities recognized | new small card | collapsed |
-| Evidence graph | `EvidenceGraph` | collapsed (lazy) |
 | Ask the detective (follow-ups) | `ChatPanel` inline | pinned at bottom of group |
 
 **Action semantics:**
@@ -155,9 +155,9 @@ On submit in Report mode: a single **acknowledgment card** —
   carry text/icon, never color alone; honor `prefers-reduced-motion`; visible focus rings;
   labelled controls.
 - **Responsive / mobile:** single-column stack; composer pins to bottom with safe-area insets;
-  44px touch targets; voice + camera capture on mobile; graph card lazy + pan/zoom friendly.
-- **Performance:** routes already `lazy`; lazy-load the graph card; thumbnail downscale before
-  preview; virtualize the stack if a session exceeds ~30 cards; debounce paste-recognition.
+  44px touch targets; voice + camera capture on mobile.
+- **Performance:** routes already `lazy`; thumbnail downscale before preview; virtualize the
+  stack if a session exceeds ~30 cards; debounce paste-recognition.
 - **State:** extend `store/caseStore.tsx` to a workspace model — `{ session, cards[], intent,
   attachments[], status, auth }` — one store, immutable updates, no module-level mutable leaks.
 - **Copy/tone:** operational + reassuring; safety steps reviewed against `data/guidance.json`.
@@ -191,8 +191,9 @@ Phases (each independently shippable):
   erasure, account menu. (Implemented; live auth still requires Azure provisioning.)
 - **P5 — History/threads:** `/cases` list + reopen snapshots in `/history`. (Implemented.)
 - **P6 — Moderation:** `/admin/reports` + pending report endpoints. (Implemented.)
-- **P7 — Polish:** Network view, per-card share, a11y/responsive/perf passes, remove dead code
-  from the old two-page flow (ask before deleting anything ambiguous).
+- **P7 — Polish:** per-card share, a11y/responsive/perf passes, remove dead code
+  from the old two-page flow (ask before deleting anything ambiguous). Do not
+  reintroduce a public Network/graph view.
 
 ## 12. Risks & mitigations
 - **Auth can't be fully tested until provisioning** → build behind `health.accounts`, ship P1–P3

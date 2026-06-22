@@ -101,9 +101,9 @@ The reasoning agents must answer from real evidence, not training-data priors.
   (`tests/unit/evals.test.ts`). 13 cases include SA scam patterns, spoken
   report/training-fee narrative, and legitimate controls. Redaction has its own
   unit tests.
-- **[next]** **Precision/recall metrics**, not just pass/fail — track
-  false-positive rate on the legitimate-control set explicitly (a real recruiter
-  flagged as a scam is the most costly error and a defamation risk).
+- **[done]** **False-positive / false-negative metrics**, not just pass/fail —
+  the offline eval summary reports both counts and the Jest gate asserts they
+  remain zero for the current labelled suite.
 - **[next]** **Grow the labelled corpus** from real (privately held) cases into
   more synthetic fixtures across categories: aggregator ring, free-host harvest,
   upfront-fee, document-harvest, impersonation, legitimate, and ambiguous.
@@ -210,7 +210,7 @@ The reasoning agents must answer from real evidence, not training-data priors.
 3. AI Search / Foundry IQ grounding for the report & chat agents (citations).
 4. Strict output-schema validation with deterministic fallback.
 5. Redacted structured logging + dashboards on the existing App Insights.
-6. FP-rate metric in evals; expand the synthetic corpus.
+6. Expand the synthetic corpus and keep the FP/FN eval metrics at zero.
 7. Privacy must-dos from `docs/PRIVACY.md` §9 (Information Officer, notice/consent,
    objection channel, retention job, SA-region/Key-Vault).
 

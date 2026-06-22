@@ -13,7 +13,7 @@
     "dev:web": "npm --prefix frontend run dev",
     "build": "npm run build:backend && npm run build:web",
     "build:backend": "tsc",
-    "build:web": "npm --prefix frontend install --package-lock=false && npm --prefix frontend run build",
+    "build:web": "npm --prefix frontend run build",
     "build:functions": "powershell -ExecutionPolicy Bypass -File scripts/azure/build-functions-package.ps1",
     "azure:monitor": "powershell -ExecutionPolicy Bypass -File scripts/azure/configure-monitoring.ps1",
     "azure:domain": "powershell -ExecutionPolicy Bypass -File scripts/azure/configure-custom-domain.ps1",

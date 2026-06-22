@@ -1,6 +1,6 @@
 # Owner Launch Steps: Domain And Auth
 
-Last updated: 2026-06-19
+Last updated: 2026-06-22
 
 These are the launch items that cannot be completed by code or Azure CLI alone.
 They require the product owner to control DNS and identity-provider accounts.
@@ -19,7 +19,7 @@ root domains use an A record. See Microsoft Learn:
 Use a subdomain first, for example:
 
 ```text
-app.verifymyinterview.com
+app.verifymyinterview.co.za
 ```
 
 This avoids root-domain IP concerns and uses a stable CNAME.
@@ -29,7 +29,7 @@ This avoids root-domain IP concerns and uses a stable CNAME.
 Run:
 
 ```powershell
-npm run azure:domain -- -HostName app.yourdomain.com -DnsOnly
+npm run azure:domain -- -HostName app.verifymyinterview.co.za -DnsOnly
 ```
 
 For the current production app, the values will look like:
@@ -39,11 +39,17 @@ CNAME app       vmi-online-3907.azurewebsites.net
 TXT   asuid.app <Azure custom domain verification id>
 ```
 
-Create those records at your domain registrar, wait for DNS propagation, then
-run:
+At FreeDNS/afraid.org, add these records under `verifymyinterview.co.za`, not
+under `app.verifymyinterview.co.za`. Use `Type=CNAME`, `Subdomain=app`,
+`Destination=vmi-online-3907.azurewebsites.net` for the app record. Use
+`Type=TXT`, `Subdomain=asuid.app`, and put the Azure verification value in
+quotes for the TXT record. Do not paste `type: cname`, `host/subdomain: app`, or
+`value/destination:` into the host fields; those are labels, not DNS values.
+
+After the records exist and DNS propagates, run:
 
 ```powershell
-npm run azure:domain -- -HostName app.yourdomain.com
+npm run azure:domain -- -HostName app.verifymyinterview.co.za
 ```
 
 For a root domain, pass `-RootDomain`:

@@ -25,7 +25,7 @@ flowchart TB
     X[(Azure AI Search<br/>vector index)] <--> N
     G[Entity Graph<br/>domains · phones · wallets · trust levels] <--> N
   end
-  W --> UI[Sentinel UI<br/>report · evidence graph · network API]
+  W --> UI[Sentinel UI<br/>workspace · history · similar reports]
   UI <--> D[Conversational Detective<br/>Foundry agent + graph_lookup tool]
 ```
 
@@ -85,9 +85,11 @@ Agents gather and vet evidence; **they never set the score**.
   automatically; authoritative-sourced entries are `trusted`. Network signals
   are trust-weighted (a lone unverified report scores 6 points; corroborated
   infrastructure scores 24+), which is the database-poisoning defense.
-- **API** — `GET /network/graph` (full graph, filterable), `GET /network/stats`
-  (trends, top domains/handles, trust counts); the `/analyze` response includes
-  the case-centric subgraph that powers the clickable evidence graph in the UI.
+- **Internal API** — `GET /network/graph` (full graph, filterable),
+  `GET /network/stats` (trends, top domains/handles, trust counts), and the
+  `/analyze` case subgraph remain available to backend/CLI/MCP surfaces. The
+  public frontend does not expose the graph; users see plain similar-report
+  evidence only when it is useful.
 
 ## Reliability and safety
 

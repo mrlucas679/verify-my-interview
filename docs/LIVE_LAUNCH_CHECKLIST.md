@@ -63,8 +63,8 @@ closed or explicitly accepted in writing.
   pushing the intended changes.
 - [x] README and production-readiness docs match the Workspace + History product
   and account/POPIA model.
-- [ ] Some older planning/reference docs may still describe historical graph/network product and
-  must be updated before external users or investors see the repo.
+- [x] Older planning/reference docs no longer advertise a public Network page
+  or user-facing evidence graph.
 - [x] Post-redesign browser screenshots were captured against the live URL at
   desktop and mobile widths under `output/playwright/`.
 
@@ -91,13 +91,13 @@ These are required before updating the real Azure/live app for owner review.
 - [ ] Review the dirty worktree and separate intentional app changes from
   unrelated local files.
 - [ ] Commit the current redesign and history work.
-- [ ] Run `npm run build`.
-- [ ] Run `npm run lint`.
-- [ ] Run `npm --prefix frontend run typecheck`.
-- [ ] Run `npm test`.
-- [ ] Run `npm run eval`.
-- [ ] Run `npm run stress:agents`.
-- [ ] Run `git grep`/secret scan for real key fragments before pushing.
+- [x] Run `npm run build`.
+- [x] Run `npm run lint`.
+- [x] Run `npm --prefix frontend run typecheck`.
+- [x] Run `npm test`.
+- [x] Run `npm run eval`.
+- [x] Run `npm run stress:agents`.
+- [x] Run `git grep`/secret scan for real key fragments before pushing.
 
 ### Azure Preview Readiness
 

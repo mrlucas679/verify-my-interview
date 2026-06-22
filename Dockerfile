@@ -8,6 +8,10 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 
+# Frontend deps are installed explicitly so npm run build can stay a pure build.
+COPY frontend/package.json frontend/package-lock.json* ./frontend/
+RUN npm --prefix frontend ci
+
 # Sources for backend + frontend
 COPY tsconfig.json ./
 COPY src ./src
