@@ -12,6 +12,8 @@ import {
 
 const PUBLIC_DNS_SERVERS = ['1.1.1.1', '8.8.8.8'];
 const MAX_DNS_RECORDS = 50;
+const DNS_TIMEOUT_MS = 1_500;
+const DNS_TRIES = 1;
 
 export interface DomainVerificationResult {
   dns?: { MX: string[]; A: string[]; AAAA: string[] };
@@ -116,12 +118,13 @@ export class DomainVerificationService {
 
   private async checkDNS(domain: string): Promise<{ MX: string[]; A: string[]; AAAA: string[] }> {
     try {
-      const fallbackResolver = new dns.Resolver();
+      const primaryResolver = new dns.Resolver({ timeout: DNS_TIMEOUT_MS, tries: DNS_TRIES });
+      const fallbackResolver = new dns.Resolver({ timeout: DNS_TIMEOUT_MS, tries: DNS_TRIES });
       fallbackResolver.setServers(PUBLIC_DNS_SERVERS);
       const [mxRecords, aRecords, aaaaRecords] = await Promise.all([
-        this.resolveWithFallback(() => dns.resolveMx(domain), () => fallbackResolver.resolveMx(domain)),
-        this.resolveWithFallback(() => dns.resolve4(domain), () => fallbackResolver.resolve4(domain)),
-        this.resolveWithFallback(() => dns.resolve6(domain), () => fallbackResolver.resolve6(domain)),
+        this.resolveWithFallback(() => primaryResolver.resolveMx(domain), () => fallbackResolver.resolveMx(domain)),
+        this.resolveWithFallback(() => primaryResolver.resolve4(domain), () => fallbackResolver.resolve4(domain)),
+        this.resolveWithFallback(() => primaryResolver.resolve6(domain), () => fallbackResolver.resolve6(domain)),
       ]);
 
       return {

@@ -1,5 +1,6 @@
 import { DomainVerificationService } from '../../../services/legacy/domainVerificationService';
 import { ToolResult } from '../../../types/tool_results';
+import { externalLookupsDisabled } from '../../config/externalLookups';
 
 const domainService = new DomainVerificationService();
 
@@ -17,6 +18,15 @@ export async function domainLookupAdapter(input: {
   senderIp?: string;
 }, signal?: AbortSignal): Promise<ToolResult> {
   const startTime = Date.now();
+
+  if (externalLookupsDisabled()) {
+    return {
+      tool: 'lookup_domain_rdap',
+      success: false,
+      error: 'domain lookup disabled for offline run',
+      duration: Date.now() - startTime,
+    };
+  }
 
   try {
     const result = await domainService.checkDomainHealth({

@@ -97,7 +97,8 @@ Agents gather and vet evidence; **they never set the score**.
 - **Evals** — `npm run eval` runs every scenario in `tests/test_cases/`
   through the full pipeline in scrubbed offline mode and asserts risk-level
   band, score range, required/forbidden signals, and network-match
-  expectations. `npm test` gates the same suite via Jest.
+  expectations. Eval output also tracks false positives and false negatives
+  separately. `npm test` gates the same suite via Jest.
 - **Health** — `GET /health` reports per-subsystem flags (foundry_agents,
   scam_network_index, entity_graph, document_ocr, voice_transcription,
   web_research).
@@ -112,16 +113,25 @@ Agents gather and vet evidence; **they never set the score**.
 | Microsoft Foundry Agent Service | The reasoning stages — Investigator, Critic, Report — plus the conversational detective (Entra ID auth, no API keys). Evidence gathering is always deterministic (complete tool coverage); the Investigator/Critic/Report reason OVER the gathered results in JSON mode (`responseFormat: json_object`), they don't drive tool-calling. Foundry tool-calling lives in chat (user-driven). Evidence extraction, Research (web search), and Network (vector/graph) are deterministic computation by design. | Deterministic per-agent fallbacks |
 | Azure AI Search | Vector + filterable index over the report corpus | In-memory seed corpus |
 | Azure AI Document Intelligence | OCR for screenshots / PDF offer letters | Text-only intake |
+| Azure AI Speech | Voice note / recorder transcription | Text/file intake |
 | Azure OpenAI | `text-embedding-3-small` vectors for semantic match | Entity/structural matching only |
+| Cosmos DB | Shared reports, de-identified corpus, accounts, redacted cases, usage, moderation queue | In-memory/local seed behavior |
+| Azure Blob Storage | Private, consented original evidence files | Ephemeral uploads only |
 
 ## Frontend
 
 React 18 + Vite + Tailwind (Sentinel design system — dark security-SaaS, no
-emojis, Space Grotesk/Inter/JetBrains Mono). Pages: Verify
-(paste / OCR upload / URL / voice) and Report (verdict, six-stage timeline,
-findings, guidance citations, evidence graph, detective chat). The report
-dossier renders the **case-centric subgraph** returned inline by `/analyze`
-(`react-force-graph-2d`, node color by type, size by report count, trust rings).
-The corpus-wide `GET /network/graph` and `GET /network/stats` endpoints exist and
-are consumed by the CLI / MCP / Functions surfaces; a standalone in-app
-intelligence-network page is roadmap, not yet built.
+emojis, Space Grotesk/Inter/JetBrains Mono). The product surface is intentionally
+small:
+
+- `/` — the single Investigation Workspace with one multimodal composer for
+  paste, file upload, voice recording, verification, reports, and follow-up chat.
+- `/history` — browser-local history plus signed-in redacted case snapshots from
+  `/cases`.
+- `/s/:id` — shared redacted investigation snapshots.
+- `/admin/reports` — admin-only moderation queue for public reports.
+- `/privacy` and `/terms` — in-product POPIA notice and use terms.
+
+The frontend no longer exposes a public graph/network page. The backend still
+builds and uses the entity graph for matching, trust, CLI/MCP surfaces, and
+future consumers; users see plain similar-report evidence when it is useful.

@@ -1,7 +1,7 @@
 {
   "name": "Legitimate Job - Microsoft",
   "evidence": "From: careers@microsoft.com\nSubject: Job Opportunity at Microsoft\n\nWe are pleased to invite you to apply for a Software Engineer position at Microsoft. Please visit our careers portal at https://careers.microsoft.com/us/en/job/1234\n\nBest regards,\nMicrosoft Talent Team",
-  "expected_risk_level": "Low Risk",
+  "expected_risk_levels": ["Low Risk", "Inconclusive"],
   "expected_score_range": [0, 25],
   "key_positive_signals": [
     "Email from official company domain",

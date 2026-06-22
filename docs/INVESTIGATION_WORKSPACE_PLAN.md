@@ -98,48 +98,46 @@ On submit in Report mode: a single **acknowledgment card** —
   moderator queue.
 - Anonymous users may report; reports enter `unverified` → moderation (no network poisoning).
 
-## 5. Authentication & account UX (Phase 4) — grounded in Microsoft Learn (2026-06-18)
-- **Library:** `@azure/msal-react` (+ `@azure/msal-browser`) — the React wrapper is the
-  first-party SDK for SPAs. App registration platform = **Single-page application** (auth-code
-  + PKCE; redirect URIs only `https:` in prod / `http://localhost` in dev, else AADSTS90023). [MS Learn: SPA config]
+## 5. Authentication & account UX (Phase 4) — implemented 2026-06-20
+- **Frontend adapter:** env-gated browser authorization-code + PKCE in
+  `frontend/src/lib/auth.tsx`; no usernames/passwords and no auth SDK dependency in
+  the API client. App registration platform = **Single-page application**; redirect
+  URIs only `https:` in prod / `http://localhost` in dev.
 - **Browser-delegated auth is REQUIRED (not native auth):** social IdPs (Google/Apple) are only
   available via browser-delegated flow — Entra's hosted sign-in page. Native auth supports local
-  email+OTP/password only. So "Sign in" = `loginPopup` (optionally `domainHint: 'google'|'apple'`
-  to jump straight to a provider); we never render credential fields or see passwords. [MS Learn:
+  email+OTP/password only. So "Sign in" redirects to Entra's hosted flow; we never
+  render credential fields or see passwords. [MS Learn:
   Identity providers for external tenants; Native-auth social tutorial]
-- **Token cache = `sessionStorage`** (MSAL default + Microsoft's recommended security/UX balance).
-  CORRECTION to earlier from-memory note: `memoryStorage` would break the redirect flow and drop
-  the session on every refresh; the real control against token theft is **XSS prevention** (our
-  strict CSP + React escaping + no `dangerouslySetInnerHTML`), which Microsoft names as the
-  responsibility of the app. `acquireTokenSilent`/`ssoSilent` + the Entra session cookie refresh
-  seamlessly; `api.ts` injects `Authorization: Bearer` per call. [MS Learn: Caching in MSAL.js]
+- **Token cache = `sessionStorage`**; the real control against token theft is **XSS
+  prevention** (strict CSP + React escaping + no `dangerouslySetInnerHTML`).
+  `api.ts` injects `Authorization: Bearer` per call through `setAuthTokenProvider()`.
 - **Anonymous trial UX:** subtle "1 free check" indicator; on the `trial_exhausted` 401, open a
   **sign-in sheet** (not a hard wall) explaining "free, unlimited, takes seconds."
 - **Moment-of-value prompt:** sign-in is requested when the user hits Save / Share / History —
   not on landing (research-backed).
-- **Account menu:** `/me` profile (email, plan=free, usage), sign-out, link to `/settings`.
+- **Account menu:** `/me` profile (email, plan=free, usage), sign-out, evidence
+  consent toggle, POPIA erasure, admin queue link when the token has `admin`.
 - **Degradation:** when `/health.accounts` is false (auth unconfigured), the entire sign-in UI
   is hidden and the app behaves exactly as the current anonymous flow.
 - **CSP change (security):** add ONLY the exact CIAM authority origin
   (`https://<tenant>.ciamlogin.com`) to `connect-src` for silent token calls — no wildcards.
-  Microsoft's own CSP enforcement is on `login.microsoftonline.com` and does not affect MSAL STS
+  Microsoft's own CSP enforcement is on `login.microsoftonline.com` and does not affect CIAM STS
   API calls or CIAM custom domains, so our change is scoped to our own page's policy. [MS Learn:
   CSP overview for Microsoft Entra ID]
 
 **Sources:** [Identity providers for external tenants](https://learn.microsoft.com/entra/external-id/customers/concept-authentication-methods-customers) ·
-[Caching in MSAL.js](https://learn.microsoft.com/entra/msal/javascript/browser/caching) ·
 [SPA code configuration](https://learn.microsoft.com/entra/identity-platform/scenario-spa-app-configuration) ·
 [CSP overview for Microsoft Entra ID](https://learn.microsoft.com/entra/identity-platform/content-security-policy)
 
 ## 6. History / threads (Phase 5)
 - Signed-in: `GET /cases` list (date, verdict chip, company) in a History view/rail;
-  `GET /cases/:id` reopens a case thread at `/c/:caseId` (read-only snapshot + re-run).
-- Anonymous: in-session only (cleared on reload), with a "sign in to keep your history" nudge.
+  `GET /cases/:id` reopens a redacted case snapshot in the main workspace.
+- Anonymous: browser-local History only; server history remains hidden until sign-in.
 
 ## 7. Moderator / admin (Phase 6, `requireAdmin`)
-- `/admin/review`: queue of `unverified` community reports (needs a new `GET /reports?status=`
-  admin endpoint — see §10). Each row: evidence summary, derived signals, actions = **promote
-  trust** / **dismiss** / **delete** (`DELETE /reports/:id`).
+- `/admin/reports`: queue of `pending_review` community reports from
+  `GET /reports/pending`. Each row: evidence summary + IOCs, actions = **approve**
+  (`POST /reports/:id/moderate`) or **reject**.
 - Visible only when the token carries the `admin` app-role (primary) or break-glass email.
 
 ## 8. Settings / privacy (Phase 4)
@@ -166,12 +164,12 @@ On submit in Report mode: a single **acknowledgment card** —
 - **Telemetry:** optional App Insights web SDK behind the same env gate (defer to post-launch).
 
 ## 10. Backend deltas required (small, additive, env-gated)
-1. **Freeform `/report`:** accept raw evidence (not just structured `companyName`+`description`),
-   run the evidence agent's extraction server-side to populate the report, store, emit
-   `report.created`, return `{ ok, reportId }` only. Keep the structured path too.
-2. **`GET /reports?status=unverified` (admin):** moderation queue list (`requireAdmin`, bounded).
-3. Confirm `/analyze`, `/me`, `/cases`, `/evidence`, consent already cover the rest (they do).
-All additive; offline evals scrub nothing new; gates stay green.
+Implemented: `/analyze`, `/me`, `/cases`, `/evidence`, consent, public `/report`
+with pending-review status, `GET /reports/pending`, `POST /reports/:id/moderate`,
+and `DELETE /reports/:id`.
+
+Remaining backend backlog: richer server-side freeform report extraction, Functions
+consumer/dead-letter reconciliation, and distributed rate limiting.
 
 ## 11. Phase plan
 
@@ -189,10 +187,10 @@ Phases (each independently shippable):
   *Demoable offline against the deterministic backend.*
 - **P2 — Report mode:** segmented control + suggestion chip; ack card; freeform `/report` backend.
 - **P3 — Card actions:** expand/collapse/copy/share (+`/share` link) and the save affordance.
-- **P4 — Auth + account:** MSAL Entra, anonymous-trial UX, sign-in-at-value, `/me`, `/settings`,
-  consent, erasure, CSP update. (Fully testable only once Azure is provisioned; degrades cleanly.)
-- **P5 — History/threads:** `/cases` list + `/c/:caseId`.
-- **P6 — Moderation:** `/admin/review` + admin reports endpoint.
+- **P4 — Auth + account:** Entra PKCE adapter, anonymous-trial UX, `/me`, consent,
+  erasure, account menu. (Implemented; live auth still requires Azure provisioning.)
+- **P5 — History/threads:** `/cases` list + reopen snapshots in `/history`. (Implemented.)
+- **P6 — Moderation:** `/admin/reports` + pending report endpoints. (Implemented.)
 - **P7 — Polish:** Network view, per-card share, a11y/responsive/perf passes, remove dead code
   from the old two-page flow (ask before deleting anything ambiguous).
 

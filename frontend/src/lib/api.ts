@@ -21,10 +21,10 @@ interface AnalyzeOptions extends RequestOptions {
 }
 
 // ── Auth token injection (pluggable) ─────────────────────────────────────────
-// The auth layer (Phase 4, MSAL/Entra) registers a provider here; until then no
-// provider is set and requests go out unauthenticated exactly as today. Keeping
-// this indirection means the API client has zero hard dependency on MSAL, so the
-// anonymous flow and offline build are unaffected.
+// The auth layer registers a browser PKCE/Entra token provider here; until then
+// no provider is set and requests go out unauthenticated exactly as today.
+// Keeping this indirection means the API client has zero hard dependency on a
+// specific auth SDK, so the anonymous flow and offline build are unaffected.
 type TokenProvider = () => Promise<string | null> | string | null;
 let authTokenProvider: TokenProvider | null = null;
 

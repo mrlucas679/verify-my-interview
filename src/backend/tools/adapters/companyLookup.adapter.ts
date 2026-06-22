@@ -1,5 +1,6 @@
 import { CompanyVerificationService } from '../../../services/legacy/companyVerification';
 import { ToolResult } from '../../../types/tool_results';
+import { externalLookupsDisabled } from '../../config/externalLookups';
 
 const companyService = new CompanyVerificationService();
 
@@ -9,6 +10,24 @@ export async function companyLookupAdapter(input: {
   country?: string;
 }, signal?: AbortSignal): Promise<ToolResult> {
   const startTime = Date.now();
+
+  if (externalLookupsDisabled()) {
+    return {
+      tool: 'lookup_company_registry',
+      success: false,
+      error: 'company registry lookup disabled for offline run',
+      duration: Date.now() - startTime,
+    };
+  }
+
+  if (!process.env.OPENCORPORATES_API_KEY?.trim()) {
+    return {
+      tool: 'lookup_company_registry',
+      success: false,
+      error: 'company registry not configured (OPENCORPORATES_API_KEY missing)',
+      duration: Date.now() - startTime,
+    };
+  }
 
   try {
     const result = await companyService.verifyCompany({

@@ -5,11 +5,13 @@ import {
   cleanString,
   cleanStringArray,
   sanitizeHttpUrl,
+  securityHeaders,
   sniffAudioType,
   sniffUploadType,
   rateLimitAllow,
   resetRateLimits,
 } from '../../src/backend/http/guard';
+import type { NextFunction, Request, Response } from 'express';
 
 describe('cleanString', () => {
   it('trims and caps length', () => {
@@ -110,5 +112,44 @@ describe('rateLimitAllow (sliding window)', () => {
     for (let i = 0; i < 3; i++) rateLimitAllow('ipA', 60_000, 3, t0);
     expect(rateLimitAllow('ipA', 60_000, 3, t0).allowed).toBe(false);
     expect(rateLimitAllow('ipB', 60_000, 3, t0).allowed).toBe(true);
+  });
+});
+
+describe('securityHeaders', () => {
+  const saved = {
+    AUTH_ISSUER: process.env.AUTH_ISSUER,
+    VITE_AUTH_AUTHORITY: process.env.VITE_AUTH_AUTHORITY,
+  };
+
+  afterEach(() => {
+    if (saved.AUTH_ISSUER === undefined) delete process.env.AUTH_ISSUER;
+    else process.env.AUTH_ISSUER = saved.AUTH_ISSUER;
+    if (saved.VITE_AUTH_AUTHORITY === undefined) delete process.env.VITE_AUTH_AUTHORITY;
+    else process.env.VITE_AUTH_AUTHORITY = saved.VITE_AUTH_AUTHORITY;
+  });
+
+  function cspForEnv(): string {
+    const headers = new Map<string, string>();
+    const res = {
+      setHeader: (name: string, value: string) => {
+        headers.set(name, value);
+      },
+    } as Pick<Response, 'setHeader'>;
+    securityHeaders({} as Request, res as Response, jest.fn() as NextFunction);
+    return headers.get('Content-Security-Policy') ?? '';
+  }
+
+  it('allows the exact configured CIAM token origin in connect-src', () => {
+    process.env.AUTH_ISSUER = 'https://tenant.ciamlogin.com/tenant-id/v2.0';
+    const csp = cspForEnv();
+    expect(csp).toContain("connect-src 'self' https://tenant.ciamlogin.com");
+  });
+
+  it('ignores non-https auth origins instead of widening CSP', () => {
+    delete process.env.AUTH_ISSUER;
+    process.env.VITE_AUTH_AUTHORITY = 'http://evil.example.test/tenant';
+    const csp = cspForEnv();
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).not.toContain('evil.example.test');
   });
 });

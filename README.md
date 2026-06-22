@@ -28,8 +28,9 @@ and payment trail?"* — and shows the proof.
    emails, phones, payment handles — never names). The UI keeps this simple:
    users see plain "Similar reports" cards only when a prior report is useful.
 4. **Workspace + History** — the product is one ChatGPT-style investigation
-   workspace, plus a simple browser-local history so users can re-check past
-   evidence without understanding internal graph machinery.
+   workspace, plus simple browser history and signed-in redacted case snapshots
+   so users can reopen past checks without understanding internal graph
+   machinery.
 
 ## Architecture
 
@@ -54,8 +55,10 @@ flowchart TB
     X[(Azure AI Search<br/>vector index)] <--> N
     G[Linked evidence<br/>domains · phones · wallets · trust levels] <--> N
   end
-  W --> UI[Investigation Workspace<br/>stacked cards · report ack · history]
+W --> UI[Investigation Workspace<br/>stacked cards · report ack · history]
   UI <--> D[Conversational Detective<br/>case-aware follow-up]
+  UI <--> H[(Cosmos DB<br/>accounts · redacted cases · reports)]
+  UI <--> B[(Private Blob Storage<br/>consented evidence files)]
 ```
 
 Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
@@ -157,7 +160,26 @@ SERPAPI_API_KEY=...              # Research agent web/OSINT
 4. Seed the similar-report index: `npm run seed:network`
 
 Deployment to Azure Container Apps is covered by the
-`.claude/skills/deploy-azure-foundry` skill.
+`.agents/skills/deploy-azure-foundry` skill.
+
+## Accounts, history, and POPIA
+
+The app stays anonymous when auth is unconfigured. When Microsoft Entra
+External ID is configured, the browser uses an env-gated PKCE flow:
+
+```bash
+AUTH_ISSUER=https://<tenant>.ciamlogin.com/<tenantId>/v2.0
+AUTH_AUDIENCE=<api-application-client-id>
+VITE_AUTH_CLIENT_ID=<spa-application-client-id>
+VITE_AUTH_AUTHORITY=https://<tenant>.ciamlogin.com/<tenantId>
+VITE_AUTH_SCOPE=api://<api-application-client-id>/access_as_user
+```
+
+Signed-in users get account history from `/cases`. Original evidence files are
+stored only after the user enables evidence retention, then uploaded through
+private `/evidence` and linked to the case by `evidenceId`. `DELETE /me` erases
+the account, cases, usage, and stored evidence; de-identified community reports
+remain for fraud prevention.
 
 ## API
 
@@ -168,8 +190,14 @@ Deployment to Azure Container Apps is covered by the
 | `POST /transcribe` | Transcribe a voice note (Azure AI Speech) for investigation |
 | `POST /upload` | OCR a screenshot/PDF via Document Intelligence |
 | `POST /report` | Submit a de-identified scam report |
+| `GET /reports/pending` | Admin only: pending public reports for moderation |
+| `POST /reports/:id/moderate` | Admin only: approve/reject a pending report |
 | `POST /share` | Save a finished report result for sharing |
 | `GET /shared/:id` | Load a shared report result |
+| `GET /me` / `DELETE /me` | Signed-in profile/usage and POPIA erasure |
+| `PUT /me/consent` | Set evidence-storage consent |
+| `GET /cases` / `GET /cases/:id` | Signed-in redacted case history |
+| `POST /evidence` / `GET /evidence/:fileId` | Consented private evidence storage/readback |
 | `GET /health` | Per-subsystem status flags |
 | `GET /docs` | API documentation |
 
@@ -187,8 +215,10 @@ demo data. Evidence is treated as untrusted input.
 accounts, payment cards — are stripped from evidence before anything is logged
 or stored, while scam indicators (domains, emails, phones) are preserved as the
 investigative evidence they are. Every channel — typed, OCR'd, or
-voice-transcribed — passes the same redaction boundary, and raw audio is never
-retained (transcript only). See [`docs/PRIVACY.md`](docs/PRIVACY.md) for the
+voice-transcribed — passes the same redaction boundary. Raw pasted text and raw
+audio are not retained by default; original files are stored only for signed-in
+users who explicitly enable evidence retention. The SPA exposes `/privacy` and
+`/terms` for in-product notice and use terms. See [`docs/PRIVACY.md`](docs/PRIVACY.md) for the
 full POPIA posture (lawful basis, minimization, retention, special personal
 information, data-subject rights) and [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md)
 for the grounding, safety, evaluation, and hardening roadmap.
