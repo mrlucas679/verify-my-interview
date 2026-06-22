@@ -5,7 +5,7 @@
 // grounding passages from prior reported scams are supplied so the narrative can
 // reference real precedent (the same grounding feeds the Investigator and Critic).
 
-import { FoundryRunner, extractJsonObject, asStringArray } from '../foundryRunner';
+import { FoundryRunner, extractJsonObject } from '../foundryRunner';
 import { Entities } from '../../../types/entities';
 import { RiskLevel } from '../../../types/report';
 import { EvidenceType, InvestigationSignals, ReporterResult } from '../types';
@@ -20,6 +20,45 @@ export interface ReporterInput {
   evidenceType?: EvidenceType;
   /** Foundry IQ grounding passages from prior reported scams (optional). */
   grounding?: GroundingPassage[];
+}
+
+interface ReporterPayload {
+  case_summary: string;
+  recommended_next_steps: string[];
+}
+
+const REPORTER_PAYLOAD_KEYS = new Set(['case_summary', 'recommended_next_steps']);
+const MAX_SUMMARY_CHARS = 1_200;
+const MAX_NEXT_STEPS = 6;
+const MAX_STEP_CHARS = 320;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cleanBoundedString(value: unknown, maxLength: number): string {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function parseReporterPayload(value: unknown): ReporterPayload | null {
+  if (!isRecord(value)) return null;
+  if (Object.keys(value).some((key) => !REPORTER_PAYLOAD_KEYS.has(key))) return null;
+
+  const caseSummary = cleanBoundedString(value.case_summary, MAX_SUMMARY_CHARS);
+  if (!caseSummary) return null;
+
+  if (!Array.isArray(value.recommended_next_steps)) return null;
+  const steps = value.recommended_next_steps
+    .slice(0, MAX_NEXT_STEPS + 1)
+    .map((item) => cleanBoundedString(item, MAX_STEP_CHARS))
+    .filter(Boolean);
+  if (steps.length === 0 || steps.length > MAX_NEXT_STEPS) return null;
+
+  return {
+    case_summary: caseSummary,
+    recommended_next_steps: steps,
+  };
 }
 
 export class ReporterAgent {
@@ -55,14 +94,12 @@ export class ReporterAgent {
       responseFormat: 'json_object', // guaranteed valid JSON object — reliable parse
     }, signal);
 
-    const parsed = extractJsonObject(finalText) ?? {};
-    const steps = asStringArray(parsed.recommended_next_steps);
-    const summary =
-      typeof parsed.case_summary === 'string' && parsed.case_summary.trim()
-        ? parsed.case_summary.trim()
-        : this.fallbackSummary(input);
-    const nextSteps = steps.length ? steps : this.fallbackSteps(input);
-    if (!this.narrativeIsSafe(input, summary, nextSteps)) {
+    const payload = parseReporterPayload(extractJsonObject(finalText));
+    if (!payload) {
+      throw new Error('Reporter output did not match the required schema');
+    }
+
+    if (!this.narrativeIsSafe(input, payload.case_summary, payload.recommended_next_steps)) {
       logger.warn('[Reporter] Foundry narrative contradicted computed signals; using deterministic summary.');
       return {
         engine: 'deterministic',
@@ -74,8 +111,8 @@ export class ReporterAgent {
     }
     return {
       engine: 'foundry',
-      case_summary: summary,
-      recommended_next_steps: nextSteps,
+      case_summary: payload.case_summary,
+      recommended_next_steps: payload.recommended_next_steps,
       citations: [],
     };
   }

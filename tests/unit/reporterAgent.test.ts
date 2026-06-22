@@ -56,4 +56,21 @@ describe('ReporterAgent narrative validation', () => {
     expect(result.engine).toBe('foundry');
     expect(result.fallback_reason).toBeUndefined();
   });
+
+  it('falls back when Foundry output does not match the exact report schema', async () => {
+    const runner = {
+      runTurn: jest.fn().mockResolvedValue({
+        finalText: JSON.stringify({
+          case_summary: 'This has serious warning signs.',
+          recommended_next_steps: ['Do not send money.'],
+          internal_trace: 'should never be accepted',
+        }),
+      }),
+    };
+
+    const result = await new ReporterAgent(runner as never).run(baseInput);
+
+    expect(result.engine).toBe('deterministic');
+    expect(result.fallback_reason).toMatch(/required schema/i);
+  });
 });

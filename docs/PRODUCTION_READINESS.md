@@ -67,10 +67,10 @@ The reasoning agents must answer from real evidence, not training-data priors.
   the managed **Foundry IQ** knowledge-base experience if available.
   Docs: [AI Search tool](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/ai-search) ·
   [Foundry IQ](https://learn.microsoft.com/azure/foundry/agents/how-to/foundry-iq-connect)
-- **[next]** **Strict output-schema validation.** The report is already a typed
-  object; validate the agent's JSON against the schema and fall back to the
-  deterministic narrative on any deviation, so a malformed/hallucinated field
-  can never reach the user.
+- **[done]** **Strict output-schema validation.** The report-writer's Foundry
+  JSON must match the exact `{ case_summary, recommended_next_steps }` schema,
+  with bounded string lengths and no surprise fields; any deviation falls back
+  to the deterministic narrative before it reaches the user.
 - **[later]** **Groundedness detection** (Azure AI Content Safety) on the
   generated narrative to flag/correct ungrounded sentences before display.
   Supported regions include East US (where resources live).
@@ -208,10 +208,9 @@ The reasoning agents must answer from real evidence, not training-data priors.
 1. Live Entra provisioning + admin role assignment + `VITE_AUTH_*` build config.
 2. Prompt Shields + default content filters on the Foundry deployment.
 3. AI Search / Foundry IQ grounding for the report & chat agents (citations).
-4. Strict output-schema validation with deterministic fallback.
-5. Redacted structured logging + dashboards on the existing App Insights.
-6. Expand the synthetic corpus and keep the FP/FN eval metrics at zero.
-7. Privacy must-dos from `docs/PRIVACY.md` §9 (Information Officer, notice/consent,
+4. Redacted structured logging + dashboards on the existing App Insights.
+5. Expand the synthetic corpus and keep the FP/FN eval metrics at zero.
+6. Privacy must-dos from `docs/PRIVACY.md` §9 (Information Officer, notice/consent,
    objection channel, retention job, SA-region/Key-Vault).
 
 See also: [`docs/PRIVACY.md`](PRIVACY.md) · [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) ·
