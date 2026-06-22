@@ -21,6 +21,25 @@ function Invoke-Checked {
   }
 }
 
+function Get-NodePackageRunner {
+  param([ValidateSet("npm", "npx")][string]$Name)
+  $isWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+    [System.Runtime.InteropServices.OSPlatform]::Windows
+  )
+  if ($isWindowsHost) {
+    $cmdRunner = Get-Command "$Name.cmd" -ErrorAction SilentlyContinue
+    if ($cmdRunner) {
+      return $cmdRunner.Source
+    }
+  }
+  return (Get-Command $Name -ErrorAction Stop).Source
+}
+
+function Invoke-Npm {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+  & (Get-NodePackageRunner "npm") @Arguments
+}
+
 function Require-Env {
   param([string]$Name)
   $value = [Environment]::GetEnvironmentVariable($Name, "Process")
@@ -430,12 +449,12 @@ Require-PositiveIntegerEnv "AUTH_SIGNED_IN_MONTHLY_MAX"
 
 Push-Location $RepoRoot
 try {
-  Invoke-Checked { npm run azure:doctor -- --require-live }
+  Invoke-Checked { Invoke-Npm run azure:doctor -- --require-live }
   if (-not $SkipDeploy) {
-    Invoke-Checked { npm run azure:deploy:appservice }
+    Invoke-Checked { Invoke-Npm run azure:deploy:appservice }
   }
   Invoke-Checked {
-    npm run online:smoke -- --url "https://$AppName.azurewebsites.net" --require-foundry --require-telemetry
+    Invoke-Npm run online:smoke -- --url "https://$AppName.azurewebsites.net" --require-foundry --require-telemetry
   }
 } finally {
   Pop-Location

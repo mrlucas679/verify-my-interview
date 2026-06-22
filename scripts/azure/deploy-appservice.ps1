@@ -43,6 +43,25 @@ function Invoke-Checked {
   }
 }
 
+function Get-NodePackageRunner {
+  param([ValidateSet("npm", "npx")][string]$Name)
+  $isWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+    [System.Runtime.InteropServices.OSPlatform]::Windows
+  )
+  if ($isWindowsHost) {
+    $cmdRunner = Get-Command "$Name.cmd" -ErrorAction SilentlyContinue
+    if ($cmdRunner) {
+      return $cmdRunner.Source
+    }
+  }
+  return (Get-Command $Name -ErrorAction Stop).Source
+}
+
+function Invoke-Npm {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+  & (Get-NodePackageRunner "npm") @Arguments
+}
+
 function Add-Setting {
   param(
     [System.Collections.IDictionary]$Map,
@@ -416,7 +435,7 @@ Push-Location $RepoRoot
 $SettingsJsonPath = $null
 try {
   if (-not $SkipBuild) {
-    Invoke-Checked { npm run build:functions }
+    Invoke-Checked { Invoke-Npm run build:functions }
   }
   if (-not (Test-Path -LiteralPath $ZipFullPath)) {
     throw "Deployment package not found: $ZipFullPath"

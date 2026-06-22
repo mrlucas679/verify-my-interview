@@ -30,6 +30,30 @@ function Invoke-Checked {
   }
 }
 
+function Get-NodePackageRunner {
+  param([ValidateSet("npm", "npx")][string]$Name)
+  $isWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+    [System.Runtime.InteropServices.OSPlatform]::Windows
+  )
+  if ($isWindowsHost) {
+    $cmdRunner = Get-Command "$Name.cmd" -ErrorAction SilentlyContinue
+    if ($cmdRunner) {
+      return $cmdRunner.Source
+    }
+  }
+  return (Get-Command $Name -ErrorAction Stop).Source
+}
+
+function Invoke-Npm {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+  & (Get-NodePackageRunner "npm") @Arguments
+}
+
+function Invoke-Npx {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+  & (Get-NodePackageRunner "npx") @Arguments
+}
+
 function Write-Text {
   param([string]$Path, [string]$Value)
   $parent = Split-Path -Parent $Path
@@ -91,7 +115,7 @@ Assert-InRepo $ZipFullPath
 Push-Location $RepoRoot
 try {
   if (-not $SkipBuild) {
-    Invoke-Checked { npm run build }
+    Invoke-Checked { Invoke-Npm run build }
   }
 
   if (Test-Path -LiteralPath $PackageDir) {
@@ -117,7 +141,7 @@ try {
   Copy-Item -Path (Join-Path $RepoRoot "public") -Destination (Join-Path $PackageDir "public") -Recurse
 
   Invoke-Checked {
-    npx esbuild src/backend/local/appTools.ts --bundle --platform=node --target=node20 --format=cjs --outfile="$PackageDir\bundle.cjs" --log-level=warning
+    Invoke-Npx esbuild ./src/backend/local/appTools.ts --bundle --platform=node --target=node20 --format=cjs --outfile="$PackageDir\bundle.cjs" --log-level=warning
   }
   Patch-ImportMeta (Join-Path $PackageDir "bundle.cjs")
 
