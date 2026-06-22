@@ -10,7 +10,7 @@ The guiding principle is already in the architecture and must not regress:
 claim cites a source.** Hardening makes that pipeline grounded, safe, measured,
 and operable — it does not move scoring into the model.
 
-## Launch status (2026-06-18)
+## Launch status (2026-06-22)
 
 The app has moved from the hackathon two-page demo shape to the current
 AI-first product shape:
@@ -23,30 +23,32 @@ AI-first product shape:
 - `/network` redirects to `/history`.
 - The public frontend graph UI and `react-force-graph-2d` dependency are gone;
   prior report matches now render as plain "Similar reports" cards.
+- Env-gated Entra PKCE sign-in, account menu, redacted case history, evidence
+  consent, POPIA erasure, and admin report moderation are implemented in the
+  product surface.
 
-Latest local gates on 2026-06-18:
+Latest full product gate:
 
 - `npm --prefix frontend run typecheck`: pass.
 - `npm run build`: pass.
 - `npm run lint`: pass.
-- `npm test`: pass, 119/119.
+- `npm test`: pass, 26 suites / 165 tests.
 - `npm run eval`: pass, 13/13.
 - `npm run stress:agents`: pass, 13/13.
-- `npm --prefix frontend audit --omit=dev`: pass, 0 vulnerabilities.
+- `npm run audit:prod`: pass, 0 production vulnerabilities. It tries the live
+  npm registry first and falls back to cached offline audit only when the
+  registry is unavailable in the local environment.
 
 Known launch caveats:
 
-- Root `npm audit --omit=dev` reports the existing OpenTelemetry advisory through
-  `@azure/monitor-opentelemetry`. `npm audit fix --force` would install a
-  breaking Azure Monitor package version, so this requires an explicit
-  dependency decision.
 - `npm run azure:doctor -- --require-live` is not ready in the current terminal:
   `APPLICATIONINSIGHTS_CONNECTION_STRING` is missing, Azure CLI is unavailable
   or not logged in, and Azure Search is not configured in the process.
-- Public beta still requires the P1 launch blockers in
-  [`LIVE_LAUNCH_CHECKLIST.md`](LIVE_LAUNCH_CHECKLIST.md): sign-in UI, quotas,
-  privacy notice/consent, production telemetry, durable storage configuration,
-  and live smoke tests against the deployed URL.
+- Public beta still requires the external P1 launch blockers in
+  [`LIVE_LAUNCH_CHECKLIST.md`](LIVE_LAUNCH_CHECKLIST.md): live Entra tenant/app
+  provisioning, admin role assignment, POPIA contact/Information Officer route,
+  production telemetry, durable storage configuration, and live smoke tests
+  against the deployed URL.
 
 ---
 
@@ -140,8 +142,13 @@ The reasoning agents must answer from real evidence, not training-data priors.
   APIs return — a phone number's registered-owner name, an email's sender name —
   so identities of third parties are never ingested, stored, or logged; only
   line type / reputation / domain age reach the scorer.
-- **[next]** **AuthN/AuthZ + rate limiting** on all write/analyze endpoints;
-  per-user quotas and tool budgets (tool-call caps already exist).
+- **[done]** **AuthN/AuthZ + access accounting**: Entra JWT validation is
+  env-gated; signed-in usage is metered; anonymous trial checks are bounded by
+  `AUTH_ANON_TRIAL_MAX`; account/case/evidence routes are caller-scoped; admin
+  moderation requires an `admin` role or explicit break-glass allow-list.
+- **[next]** **Adversarial-use response shaping**: rate limits and tool-call
+  caps already exist, but anonymous over-limit UX and signal-detail suppression
+  should be verified live before public traffic.
 - **[next]** **Observability.** App Insights + Log Analytics are already
   provisioned — wire structured, **redacted** request/decision logging and
   dashboards (latency, engine mode, signal distribution, FP rate). Pre-warm the
@@ -198,8 +205,7 @@ The reasoning agents must answer from real evidence, not training-data priors.
 
 ## First production sprint (the [next] set, in order)
 
-1. AuthN/AuthZ + adversarial-use throttle on `/analyze`, `/report`, `/chat`
-   (per-route rate limits and tool-call budgets already exist).
+1. Live Entra provisioning + admin role assignment + `VITE_AUTH_*` build config.
 2. Prompt Shields + default content filters on the Foundry deployment.
 3. AI Search / Foundry IQ grounding for the report & chat agents (citations).
 4. Strict output-schema validation with deterministic fallback.

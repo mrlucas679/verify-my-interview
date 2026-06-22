@@ -53,6 +53,16 @@ export function Layout() {
       <main>
         <Outlet />
       </main>
+      <footer className="border-t border-line/60 bg-ink-900 px-4 py-4 text-center text-xs text-faint">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-x-4 gap-y-2">
+          <NavLink to="/privacy" className="transition hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            Privacy
+          </NavLink>
+          <NavLink to="/terms" className="transition hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            Terms
+          </NavLink>
+        </div>
+      </footer>
     </div>
   );
 }

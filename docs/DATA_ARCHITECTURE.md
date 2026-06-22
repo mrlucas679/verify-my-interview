@@ -1,15 +1,16 @@
 # Data Architecture & POPIA Design — Full-Platform Plan
 
-Status: **DESIGN (pre-build)** · Created 2026-06-16 · Owner decision required on the
-items marked **[DECISION]**. This is the design step for the user-approved "full
-platform" direction: persistent **Cosmos DB** (users, companies, reports, audit,
-trust) + **Blob Storage** (evidence files) + **Service Bus/Event Grid** (events),
-on the canonical Express-on-Container-Apps runtime.
+Status: **IMPLEMENTED / PROVISIONING-GATED** · Created 2026-06-16 · Updated
+2026-06-20. This is the full-platform data architecture now present in code:
+persistent **Cosmos DB** (users, cases, reports, moderation, usage, graph
+revision) + private **Blob Storage** (consented evidence files) + **Service Bus**
+events, on the canonical Express runtime. Features remain env-gated so an
+unconfigured deployment keeps the anonymous, stateless verification flow.
 
-> This reverses the app's current **stateless, PII-minimal** posture (no accounts,
-> evidence never stored — CLAUDE.md rule 4 / decision D2). Everything below is
-> engineered so that NOT configuring a data service keeps today's behaviour
-> (graceful degradation, rule 2) and offline evals stay deterministic (rule 3).
+> POPIA posture: raw pasted evidence is not stored by default. Signed-in users get
+> durable redacted case snapshots; original files are stored only after explicit
+> evidence-retention consent. Community reports remain de-identified and
+> moderation-gated before they enter the intelligence corpus.
 
 ## 1. Identity, authentication & subscription tiers  — DECIDED 2026-06-16
 
@@ -19,18 +20,13 @@ Frictionless, ChatGPT/Claude-style onboarding — **no usernames/passwords**.
   identity providers (both are first-class Entra External ID social IdPs). The API
   validates the JWT; Microsoft handles credential security. Sign-up/login in seconds.
 - **Roles:** `user` (free) → `premium` → `analyst`/`admin` (future).
-- **Freemium model:**
-  - **Free tier** — a limited number of verification checks (limit **[DECISION: exact
-    number TBD]**, enforced per user per rolling period).
-  - **Premium tier** — affordable subscription: **unlimited** checks, priority access
-    to new features, future premium capabilities.
-  - Requires: a `subscription` block on `users` (plan, status, renewal), a `usage`
-    record (checks consumed in the period), enforcement at `/analyze`, and a
-    **payment provider [DECISION]** (recommend **Stripe** — mature, SA-supported,
-    simple webhooks; alternative: Azure Marketplace SaaS offers / Paddle).
-- **Anonymous trial:** to keep onboarding effortless we MAY allow a tiny
-  unauthenticated trial (e.g. 1 check) before prompting sign-in **[DECISION]**;
-  otherwise sign-in (Google/Apple) is required and still takes seconds.
+- **Freemium model (current policy):**
+  - **Signed-in users** — unlimited checks for now; usage is metered monthly so a
+    future cap or premium tier can be enabled without migration.
+  - **Anonymous visitors** — `AUTH_ANON_TRIAL_MAX` trial checks (default `1`) before
+    the API returns `trial_exhausted`.
+  - **Premium/billing** — deferred. Usage records and plan fields are already in
+    place; Stripe remains the recommended provider when the commercial tier starts.
 
 ## 2. POPIA compliance (non-negotiable, SA users)
 
@@ -114,8 +110,14 @@ removes the current "Search is the only store" fragility.
 4. ✅ **Evidence Blob:** consented private storage (`storage/blob.ts`, managed
    identity or connection string), ownership-scoped reads, erasure via `DELETE /me`.
    12-month retention = a Blob lifecycle rule (infra). _(implemented)_
-5. ⬜ **Frontend:** Google/Apple sign-in, account UI, case history, consent flows;
-   optional SWA/Vercel split. _(not started — out of current backend scope)_
+5. ✅ **Frontend platform wiring:** env-gated browser PKCE auth adapter
+   (`frontend/src/lib/auth.tsx`) using `VITE_AUTH_CLIENT_ID`,
+   `VITE_AUTH_AUTHORITY`, `VITE_AUTH_SCOPE`, and optional
+   `VITE_AUTH_REDIRECT_URI`; account menu with profile/usage, sign-out, evidence
+   consent, POPIA erasure; hybrid History that merges local browser entries with
+   `/cases` redacted snapshots; one-composer evidence retention that stores
+   consented files via `/evidence` and links returned `evidenceIds` to `/analyze`;
+   admin moderation queue at `/admin/reports`. _(implemented 2026-06-20)_
 
 **Endpoints added (slices ③–④):** `GET /me`, `DELETE /me` (self-service erasure),
 `PUT /me/consent` (evidence-storage consent), `GET /cases`, `GET /cases/:id`,
@@ -137,22 +139,22 @@ proves WHO the caller is; authorization decides what they may do.
 - **Consent gate:** `POST /evidence` refuses (403) until the user has recorded explicit
   consent via `PUT /me/consent` (POPIA lawful basis for evidence retention).
 
-**Provisioning still required to run these LIVE:** an Entra External ID tenant + app
-registration (set `AUTH_ISSUER`/`AUTH_AUDIENCE`), Google + Apple social connections in
-Entra, and a Storage account (`AZURE_STORAGE_ACCOUNT` + managed-identity RBAC, or a
-connection string). Until then the code is inert and the app runs exactly as before.
+**Provisioning still required to run these LIVE:** an Entra External ID tenant + API
+and SPA app registrations, Google + Apple social connections in Entra, backend
+`AUTH_ISSUER`/`AUTH_AUDIENCE`, frontend `VITE_AUTH_*`, Cosmos connection strings
+with PII collections routed to South Africa North, and a private Storage account
+(`AZURE_STORAGE_ACCOUNT` + managed-identity RBAC, or a connection string for dev).
+Until then the code is inert and the app runs exactly as before.
 
 ## 8. Decisions
 
-**Resolved 2026-06-16:** auth = Entra External ID with **Google + Apple** social
-sign-in (frictionless, no passwords); **freemium** (limited free checks + unlimited
-premium); PII residency = **South Africa North**; retention = **12 months evidence /
-90 days audit**.
+**Resolved:** auth = Entra External ID with **Google + Apple** social sign-in
+(frictionless, no passwords); signed-in checks = **unlimited and metered** for now;
+anonymous trial = `AUTH_ANON_TRIAL_MAX` (default `1`); PII residency = **South
+Africa North**; retention = **12 months evidence / 90 days audit**; public reports
+= **pending review** until approved by an admin.
 
-**Still open (gate slices ③–④ only — slices ①–② can proceed now):**
-- **[DECISION]** Free-tier check limit (exact number per period).
-- **[DECISION]** Payment provider (recommend **Stripe**).
-- **[DECISION]** Allow a tiny anonymous trial (e.g. 1 check) before sign-in, or require
-  Google/Apple sign-in up front?
-
-Build starts at slice ① (non-PII Cosmos foundation in `eastus2`) — needs none of these.
+**Still deferred:** premium tier, billing provider integration (recommend
+**Stripe**), Functions-based Service Bus consumer with dead-letter/reconciliation,
+shared distributed rate-limit store, and final privacy/terms content before broad
+public launch.

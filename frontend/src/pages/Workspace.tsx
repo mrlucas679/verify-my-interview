@@ -5,6 +5,7 @@ import {
   Check,
   Clipboard,
   ExternalLink,
+  LogIn,
   Loader2,
   Share2,
   Square,
@@ -198,6 +199,40 @@ function RunningCard() {
     <div className="flex items-center gap-2 text-sm text-muted" role="status" aria-live="polite">
       <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" strokeWidth={1.75} />
       Checking...
+    </div>
+  );
+}
+
+function InvestigationErrorCard({
+  entry,
+  authEnabled,
+  authLoading,
+  onSignIn,
+}: {
+  entry: CaseEntry;
+  authEnabled: boolean;
+  authLoading: boolean;
+  onSignIn: () => Promise<void>;
+}) {
+  const canSignIn = authEnabled && (entry.errorCode === 'trial_exhausted' || entry.errorCode === 'auth_required');
+  return (
+    <div role="alert" className="surface flex max-w-[94%] items-start gap-3 border-risk-scam/40 p-4 text-sm text-risk-scam sm:max-w-[82%]">
+      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.75} />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">We could not complete this check.</p>
+        <p className="mt-1 text-risk-scam/90">{entry.error}</p>
+        {canSignIn && (
+          <button
+            type="button"
+            onClick={() => void onSignIn()}
+            disabled={authLoading}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-line bg-ink-800 px-3 py-2 text-xs text-slate-100 transition hover:border-accent/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+          >
+            {authLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" strokeWidth={1.75} />}
+            Sign in
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -735,13 +770,12 @@ export function Workspace() {
                     {item.entry.status === 'running' ? (
                       <RunningCard />
                     ) : item.entry.status === 'error' ? (
-                      <div role="alert" className="surface flex items-start gap-3 border-risk-scam/40 p-4 text-sm text-risk-scam">
-                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.75} />
-                        <div>
-                          <p className="font-medium">We could not complete this check.</p>
-                          <p className="mt-1 text-risk-scam/90">{item.entry.error}</p>
-                        </div>
-                      </div>
+                      <InvestigationErrorCard
+                        entry={item.entry}
+                        authEnabled={auth.enabled}
+                        authLoading={auth.loading}
+                        onSignIn={auth.signIn}
+                      />
                     ) : item.entry.result ? (
                       <ResultGroup result={item.entry.result} isLatest={item.entry.id === latestDoneId} />
                     ) : null}

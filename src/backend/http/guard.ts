@@ -219,9 +219,26 @@ export function resetRateLimits(): void {
 /**
  * Conservative headers for an API + same-origin SPA. CSP allows exactly what
  * the built frontend uses: self-hosted scripts, Google Fonts stylesheets,
- * inline styles (React style attributes), data: images (canvas/graph), and
- * same-origin fetches.
+ * inline styles (React style attributes), data: images (canvas/graph),
+ * same-origin fetches, and the exact configured Entra CIAM origin for PKCE token
+ * calls when auth is enabled.
  */
+function ciamConnectSources(): string[] {
+  const sources = new Set<string>(["'self'"]);
+  for (const value of [process.env.AUTH_ISSUER, process.env.VITE_AUTH_AUTHORITY]) {
+    if (!value) continue;
+    try {
+      const url = new URL(value);
+      if (url.protocol === 'https:' && /^[a-z0-9.-]+$/i.test(url.hostname)) {
+        sources.add(url.origin);
+      }
+    } catch {
+      /* Invalid auth config is handled by config/security.ts. */
+    }
+  }
+  return [...sources];
+}
+
 export function securityHeaders(req: Request, res: Response, next: NextFunction): void {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -238,7 +255,7 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       'font-src https://fonts.gstatic.com',
       "img-src 'self' data: blob:",
-      "connect-src 'self'",
+      `connect-src ${ciamConnectSources().join(' ')}`,
       "object-src 'none'",
       "base-uri 'self'",
       "frame-ancestors 'none'",

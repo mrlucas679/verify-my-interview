@@ -259,7 +259,7 @@ export function deriveSignals(
         id: 'credential_request',
         label: 'Sensitive details requested before hire',
         category: 'red',
-        points: 35,
+        points: 40,
         evidence: {
           source: 'detect_scam_patterns',
           detail: `Requested: ${pd.credential_requests.slice(0, 4).join(', ')}`,
@@ -599,7 +599,7 @@ export function deriveSignals(
       id: 'credential_request',
       label: 'Sensitive details requested before hire',
       category: 'red',
-      points: 35,
+      points: 40,
       evidence: {
         source: 'text',
         detail: `Requested before any verified hire: ${credentialCues.slice(0, 4).join(', ')}`,

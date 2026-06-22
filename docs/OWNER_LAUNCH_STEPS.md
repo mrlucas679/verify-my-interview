@@ -134,20 +134,25 @@ accounts: true
 
 ### Frontend settings
 
-When MSAL is added to the frontend, it should use:
+The frontend now has an env-gated browser PKCE adapter. Set these at frontend
+build time:
 
 ```text
 VITE_AUTH_CLIENT_ID=<application-client-id>
 VITE_AUTH_AUTHORITY=https://<external-id-tenant>.ciamlogin.com/<tenant-id>
 VITE_AUTH_SCOPE=api://<application-client-id>/access_as_user
+# Optional; defaults to https://<app-origin>/auth/callback
+VITE_AUTH_REDIRECT_URI=https://<app-origin>/auth/callback
 ```
 
-The frontend must register an access-token provider with
-`setAuthTokenProvider()` in `frontend/src/lib/api.ts`.
+The adapter registers the access-token provider with `setAuthTokenProvider()`.
+When these variables are absent, the sign-in/account UI stays hidden and the app
+continues in anonymous mode.
 
 ### Do not do this
 
 - Do not set `ALLOW_INSECURE=1` for public beta.
-- Do not enable auth until users have a visible sign-in path.
+- Do not enable backend auth until the deployed frontend build includes the
+  matching `VITE_AUTH_*` settings.
 - Do not store Google/Apple provider secrets in the repo.
 - Do not publish the app broadly before privacy/terms pages are live.

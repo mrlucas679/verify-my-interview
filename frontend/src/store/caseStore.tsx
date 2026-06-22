@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { AnalyzeResponse, RiskLevel } from '../lib/types';
-import { analyze, getCase, listCases, loadSharedReport, type ServerCase } from '../lib/api';
+import { ApiError, analyze, getCase, listCases, loadSharedReport, type ServerCase } from '../lib/api';
 import { useAuth } from '../lib/auth';
 
 const HISTORY_KEY = 'vmi.history.v1';
@@ -25,6 +25,7 @@ export interface CaseEntry {
   status: 'running' | 'done' | 'error';
   result: AnalyzeResponse | null;
   error: string | null;
+  errorCode?: string;
   createdAt: number;
 }
 
@@ -303,7 +304,7 @@ export function CaseProvider({ children }: { children: ReactNode }) {
           return null;
         }
         const message = e instanceof Error ? e.message : 'Investigation failed';
-        updateEntry(id, { status: 'error', error: message });
+        updateEntry(id, { status: 'error', error: message, errorCode: e instanceof ApiError ? e.code : undefined });
         setError(message);
         return null;
       } finally {

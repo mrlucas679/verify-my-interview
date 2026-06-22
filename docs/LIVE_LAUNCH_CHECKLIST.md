@@ -39,29 +39,31 @@ closed or explicitly accepted in writing.
 - [x] Non-deploying readiness tools exist:
   `npm run azure:doctor`, `npm run online:smoke`, `npm run verify:product`.
 
-### Verified Locally On 2026-06-18
+### Verified Locally On 2026-06-22
 
 - [x] `npm --prefix frontend run typecheck`
 - [x] `npm run build`
 - [x] `npm run lint`
-- [x] `npm test` - 119/119 tests passed.
+- [x] `npm test` - 26 suites / 165 tests passed.
 - [x] `npm run eval` - 13/13 eval cases passed.
 - [x] `npm run stress:agents` - 13/13 stress checks passed.
-- [x] `npm --prefix frontend audit --omit=dev` - 0 vulnerabilities.
+- [x] `npm run audit:prod` - 0 production vulnerabilities; online registry
+  audit is attempted first, with cached offline fallback only when the registry
+  is unavailable.
 
 ### Current Known Caveats
 
-- [ ] Root production audit reports the existing OpenTelemetry advisory through
-  `@azure/monitor-opentelemetry`. `npm audit fix --force` would install a
-  breaking Azure Monitor package version, so this needs an explicit dependency
-  decision.
+- [x] Root and frontend production audits are clean through `npm run audit:prod`
+  (0 vulnerabilities).
 - [x] Live Azure Functions preview is deployed at
   `https://vmi-online-3907.azurewebsites.net`; `/health`, share persistence,
   Foundry smoke, telemetry, HTTPS redirect, and security headers were verified
   on 2026-06-19.
 - [ ] The working tree is dirty. Ship only after reviewing, committing, and
   pushing the intended changes.
-- [ ] README and some docs still describe the older graph/network product and
+- [x] README and production-readiness docs match the Workspace + History product
+  and account/POPIA model.
+- [ ] Some older planning/reference docs may still describe historical graph/network product and
   must be updated before external users or investors see the repo.
 - [x] Post-redesign browser screenshots were captured against the live URL at
   desktop and mobile widths under `output/playwright/`.
@@ -78,11 +80,11 @@ These are required before updating the real Azure/live app for owner review.
   no visible graph, no unexplained technical language.
 - [ ] Confirm copy is clear for ordinary users:
   "Check", "Report", "History", "Similar reports", "Report received".
-- [ ] Update README product description, endpoint table, screenshots/story, and
+- [x] Update README product description, endpoint table, screenshots/story, and
   eval counts to match the current product.
-- [ ] Update `docs/PRODUCTION_READINESS.md` stale UI notes.
-- [ ] Decide whether the backend `/network/*` API remains internal only or should
-  be hidden from `/docs` for public-facing clarity.
+- [x] Update `docs/PRODUCTION_READINESS.md` stale UI notes.
+- [x] Keep backend `/network/*` internal-only in public docs; `/docs` does not
+  advertise the network API.
 
 ### Code And Verification
 
@@ -127,24 +129,27 @@ These are required before real users can rely on the service.
 - [ ] Provision Microsoft Entra External ID tenant.
 - [ ] Configure Google and Apple social sign-in in Entra.
 - [ ] Configure API app registration and set `AUTH_ISSUER`, `AUTH_AUDIENCE`.
-- [ ] Configure SPA auth flow in the frontend. Backend auth exists, but the
-  current frontend does not yet expose sign-in/account UI.
+- [ ] Configure SPA auth build variables:
+  `VITE_AUTH_CLIENT_ID`, `VITE_AUTH_AUTHORITY`, `VITE_AUTH_SCOPE`, optional
+  `VITE_AUTH_REDIRECT_URI`.
+- [ ] Verify frontend sign-in, sign-out, `/me` profile loading, account history,
+  evidence consent, and `DELETE /me` erasure on the live origin.
 - [ ] Confirm anonymous trial policy. Current backend default is 1 anonymous
   check before sign-in.
 - [ ] Confirm signed-in usage policy. Current backend meters signed-in users but
   does not cap them.
-- [ ] Add frontend states for trial exhausted, sign-in required, signed-in user,
-  and account deletion.
+- [x] Frontend account surface exists: sign-in, signed-in user menu, evidence
+  consent, account deletion, account history, and admin report queue.
 - [ ] Add admin role assignment and remove/empty `AUTH_ADMIN_EMAILS` after
   bootstrap.
 - [ ] Decide whether to run single replica until a shared rate-limit store exists.
 
 ### Privacy And Legal
 
-- [ ] Publish an in-app privacy notice before users submit evidence.
-- [ ] Add terms/disclaimer: this is evidence-backed risk assessment, not a final
+- [x] Publish an in-app privacy notice before users submit evidence.
+- [x] Add terms/disclaimer: this is evidence-backed risk assessment, not a final
   accusation or legal finding.
-- [ ] Add explicit consent UI before storing original evidence files.
+- [x] Add explicit consent UI before storing original evidence files.
 - [ ] Confirm POPIA Information Officer/contact route.
 - [ ] Confirm objection/correction/deletion process for users and companies.
 - [ ] Configure Cosmos PII store/data residency as designed.
@@ -187,9 +192,10 @@ These are required before real users can rely on the service.
   or needs a job/polling path first.
 - [ ] Add live smoke checks for upload, transcribe, report, share, and auth, not
   only `/analyze`.
-- [ ] Add route-level tests for auth, report API key, upload/transcribe failures,
-  analyze redaction, and account deletion.
-- [ ] Track false positives and false negatives separately in eval reporting.
+- [x] Add route-level tests for public docs visibility, auth-disabled account
+  routes, production report API-key enforcement, upload/transcribe failures, and
+  analyze redaction. POPIA deletion cascade is covered in data-layer tests.
+- [x] Track false positives and false negatives separately in eval reporting.
 
 ## P2 - Full Public Launch
 
@@ -219,9 +225,10 @@ telemetry is missing and Azure CLI is not available/logged in from this terminal
 
 ### Can We Let The General Public Use It Now?
 
-**Not yet.** The core investigation product is working, but public beta needs
-auth/sign-in UI, quotas, privacy notice/consent, production telemetry, durable
-storage configuration, and live smoke tests against the deployed URL.
+**Not yet.** The core investigation product and account UI are working, but
+public beta needs live Entra provisioning, admin role assignment, POPIA contact
+confirmation, production telemetry, durable storage configuration, and live smoke
+tests against the deployed URL.
 
 ### Recommended Next Move
 

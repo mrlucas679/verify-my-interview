@@ -68,6 +68,9 @@ const SCRUBBED_ENV = [
   'AZURE_STORAGE_CONNECTION_STRING',
 ];
 
+const OFFLINE_ONLY_ENV = ['VMI_OFFLINE_EVAL', 'VMI_EXTERNAL_LOOKUPS_DISABLED'] as const;
+const EVAL_ENV_KEYS = [...SCRUBBED_ENV, ...OFFLINE_ONLY_ENV] as const;
+
 export interface EvalCaseFile {
   name: string;
   evidence: string;
@@ -92,21 +95,113 @@ export interface EvalResult {
   score: number;
   signals: string[];
   failures: string[];
+  falsePositive: boolean;
+  falseNegative: boolean;
   passed: boolean;
   duration_ms: number;
 }
 
+export interface EvalSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  falsePositives: number;
+  falseNegatives: number;
+}
+
 const CASES_DIR = path.resolve(__dirname, '../../../tests/test_cases');
+
+const RISK_RANK: Record<string, number> = {
+  Inconclusive: 0,
+  'Low Risk': 1,
+  'Needs More Verification': 2,
+  Suspicious: 3,
+  'Likely Scam': 4,
+};
+
+function riskRank(level: string): number | null {
+  return Object.prototype.hasOwnProperty.call(RISK_RANK, level) ? RISK_RANK[level] : null;
+}
+
+function classifyLevelMiss(actual: string, expectedLevels: string[] | null): {
+  falsePositive: boolean;
+  falseNegative: boolean;
+} {
+  if (!expectedLevels?.length) return { falsePositive: false, falseNegative: false };
+  const actualRank = riskRank(actual);
+  const expectedRanks = expectedLevels.map(riskRank).filter((rank): rank is number => rank !== null);
+  if (actualRank === null || expectedRanks.length === 0) {
+    return { falsePositive: false, falseNegative: false };
+  }
+  return {
+    falsePositive: actualRank > Math.max(...expectedRanks),
+    falseNegative: actualRank < Math.min(...expectedRanks),
+  };
+}
+
+export function summarizeEvalResults(results: EvalResult[]): EvalSummary {
+  const passed = results.filter((r) => r.passed).length;
+  return {
+    total: results.length,
+    passed,
+    failed: results.length - passed,
+    falsePositives: results.filter((r) => r.falsePositive).length,
+    falseNegatives: results.filter((r) => r.falseNegative).length,
+  };
+}
+
+function snapshotEnv(keys: readonly string[]): Record<string, string | undefined> {
+  const snapshot: Record<string, string | undefined> = {};
+  for (const key of keys) snapshot[key] = process.env[key];
+  return snapshot;
+}
+
+function restoreEnv(keys: readonly string[], snapshot: Record<string, string | undefined>): void {
+  for (const key of keys) {
+    const value = snapshot[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
+function applyOfflineEvalEnv(): void {
+  for (const key of SCRUBBED_ENV) delete process.env[key];
+  process.env.VMI_OFFLINE_EVAL = '1';
+  process.env.VMI_EXTERNAL_LOOKUPS_DISABLED = '1';
+  process.env.VMI_TELEMETRY_DISABLED = '1';
+}
+
+interface AgentOrchestratorLike {
+  analyze(evidence: string, caseId: string): Promise<AnalysisResult>;
+}
+
+interface OrchestratorModule {
+  AgentOrchestrator?: AgentOrchestratorLike;
+  default?: {
+    AgentOrchestrator?: AgentOrchestratorLike;
+  };
+}
 
 export async function runEvalCases(
   live = false
-): Promise<{ results: EvalResult[]; allPassed: boolean; mode: 'offline' | 'live' }> {
+): Promise<{ results: EvalResult[]; summary: EvalSummary; allPassed: boolean; mode: 'offline' | 'live' }> {
+  const envSnapshot = snapshotEnv(EVAL_ENV_KEYS);
   if (!live) {
-    for (const key of SCRUBBED_ENV) delete process.env[key];
+    applyOfflineEvalEnv();
   }
+  try {
+    return await runEvalCasesWithCurrentEnv(live);
+  } finally {
+    if (!live) restoreEnv(EVAL_ENV_KEYS, envSnapshot);
+  }
+}
+
+async function runEvalCasesWithCurrentEnv(
+  live: boolean
+): Promise<{ results: EvalResult[]; summary: EvalSummary; allPassed: boolean; mode: 'offline' | 'live' }> {
   // Import AFTER scrubbing — subsystem singletons read env when first loaded.
   // (Tolerate both interop shapes for the dynamically imported module.)
-  const mod: any = await import('../agent/orchestrator');
+  const mod = (await import('../agent/orchestrator')) as OrchestratorModule;
   const AgentOrchestrator = mod.AgentOrchestrator ?? mod.default?.AgentOrchestrator;
   if (!AgentOrchestrator) {
     throw new Error('Failed to load AgentOrchestrator from ../agent/orchestrator');
@@ -122,6 +217,8 @@ export async function runEvalCases(
     const c = JSON.parse(fs.readFileSync(path.join(CASES_DIR, file), 'utf-8')) as EvalCaseFile;
     const started = Date.now();
     const failures: string[] = [];
+    let falsePositive = false;
+    let falseNegative = false;
     try {
       const { report, signals, matches, graph }: AnalysisResult = await AgentOrchestrator.analyze(
         c.evidence,
@@ -133,18 +230,29 @@ export async function runEvalCases(
         c.expected_risk_levels ?? (c.expected_risk_level ? [c.expected_risk_level] : null);
       if (expectedLevels && !expectedLevels.includes(report.risk_level)) {
         failures.push(`level "${report.risk_level}" not in [${expectedLevels.join(', ')}]`);
+        const classification = classifyLevelMiss(report.risk_level, expectedLevels);
+        falsePositive = falsePositive || classification.falsePositive;
+        falseNegative = falseNegative || classification.falseNegative;
       }
       if (c.expected_score_range) {
         const [min, max] = c.expected_score_range;
         if (report.risk_score < min || report.risk_score > max) {
           failures.push(`score ${report.risk_score} outside [${min}, ${max}]`);
+          falsePositive = falsePositive || report.risk_score > max;
+          falseNegative = falseNegative || report.risk_score < min;
         }
       }
       for (const id of c.required_signals ?? []) {
-        if (!fired.includes(id)) failures.push(`required signal missing: ${id}`);
+        if (!fired.includes(id)) {
+          failures.push(`required signal missing: ${id}`);
+          falseNegative = true;
+        }
       }
       for (const id of c.forbidden_signals ?? []) {
-        if (fired.includes(id)) failures.push(`forbidden signal fired: ${id}`);
+        if (fired.includes(id)) {
+          failures.push(`forbidden signal fired: ${id}`);
+          falsePositive = true;
+        }
       }
       if (c.expect_network_match !== undefined) {
         const linkedReports = graph.nodes.filter(
@@ -156,6 +264,8 @@ export async function runEvalCases(
             `network match: expected ${c.expect_network_match}, got ${hasMatch} ` +
               `(${matches.length} semantic, ${linkedReports} graph-linked)`
           );
+          falsePositive = falsePositive || (!c.expect_network_match && hasMatch);
+          falseNegative = falseNegative || (c.expect_network_match && !hasMatch);
         }
       }
 
@@ -166,6 +276,8 @@ export async function runEvalCases(
         score: report.risk_score,
         signals: fired,
         failures,
+        falsePositive,
+        falseNegative,
         passed: failures.length === 0,
         duration_ms: Date.now() - started,
       });
@@ -177,13 +289,16 @@ export async function runEvalCases(
         score: -1,
         signals: [],
         failures: [`pipeline threw: ${e instanceof Error ? e.message : String(e)}`],
+        falsePositive: false,
+        falseNegative: true,
         passed: false,
         duration_ms: Date.now() - started,
       });
     }
   }
 
-  return { results, allPassed: results.every((r) => r.passed), mode: live ? 'live' : 'offline' };
+  const summary = summarizeEvalResults(results);
+  return { results, summary, allPassed: summary.failed === 0, mode: live ? 'live' : 'offline' };
 }
 
 function printTable(results: EvalResult[], mode: string): void {
@@ -202,17 +317,21 @@ function printTable(results: EvalResult[], mode: string): void {
     for (const f of r.failures) console.log(`  - ${f}`);
   }
   const passed = results.filter((r) => r.passed).length;
+  const summary = summarizeEvalResults(results);
   console.log(`\n${passed}/${results.length} cases passed.\n`);
+  console.log(
+    `False positives: ${summary.falsePositives} · False negatives: ${summary.falseNegatives}\n`
+  );
 }
 
 if (require.main === module) {
   const live = process.argv.includes('--live');
   runEvalCases(live)
-    .then(({ results, allPassed, mode }) => {
+    .then(({ results, summary, allPassed, mode }) => {
       printTable(results, mode);
       fs.writeFileSync(
         path.resolve(__dirname, '../../../eval-results.json'),
-        JSON.stringify({ mode, generatedAt: new Date().toISOString(), results }, null, 2)
+        JSON.stringify({ mode, generatedAt: new Date().toISOString(), summary, results }, null, 2)
       );
       process.exit(allPassed ? 0 : 1);
     })

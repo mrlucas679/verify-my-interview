@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "node ./scripts/dev-server.mjs",
+    "build": "vite build --outDir ../public --emptyOutDir",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },

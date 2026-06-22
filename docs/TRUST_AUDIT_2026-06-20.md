@@ -58,6 +58,9 @@ Sub-agent tracks covered:
 - Updated `tests/unit/cosmos.test.ts`: anonymous rollback and graph revision marker coverage.
 - Updated `tests/unit/securityConfig.test.ts`: production report-write policy coverage.
 - Added `tests/unit/reportModeration.test.ts`: public report queueing, trusted API-key ingestion, pending listing, approval, and rejection coverage.
+- Added `tests/unit/serverRoutes.test.ts`: public docs visibility, analyze/report boundary validation, production report API-key enforcement, upload/transcribe file failures, account fail-closed behavior when auth is disabled, and `/analyze` response redaction.
+- Updated offline eval reporting to track false positives and false negatives separately, and to restore/scrub env safely so local `.env` values cannot leak live providers into deterministic gates.
+- Tightened offline stress/eval mode with `VMI_EXTERNAL_LOOKUPS_DISABLED`, env-gated registry lookup, bounded DNS resolver attempts, and fast provider skips under restricted-network test runs.
 
 ## Verification
 
@@ -67,10 +70,10 @@ Sub-agent tracks covered:
 - Frontend build: pass
 - ESLint: pass
 - Frontend typecheck: pass
-- Jest: 25 suites, 156 tests passed
-- Offline evals: 13/13 passed
+- Jest: 26 suites, 165 tests passed
+- Offline evals: 13/13 passed, false positives 0, false negatives 0
 - Agent stress: 13/13 passed
-- Production npm audits: 0 vulnerabilities
+- Production npm audits: 0 vulnerabilities through `npm run audit:prod` (online audit first; cached offline fallback only when the registry is unavailable)
 
 Note: frontend install still reports existing dev-only audit advisories before the production audit step; the production `--omit=dev` audits are clean.
 
