@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { formatAzureDoctor, runAzureDoctor } from '../ops/azureDoctor';
 
 function hasFlag(name: string): boolean {

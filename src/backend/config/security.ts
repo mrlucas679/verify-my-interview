@@ -14,6 +14,7 @@
 // non-networked, so these network controls don't apply to them.
 
 import { authEnabled } from '../auth/identity';
+import { signedInMonthlyMax } from '../auth/quota';
 import { cosmosEnabled } from '../data/cosmos';
 import { azureMonitorConfigured } from '../observability/telemetry';
 import { logger } from '../observability/logger';
@@ -76,6 +77,11 @@ export function securityConfigViolations(): string[] {
     if (!process.env.AUTH_ANON_SALT) {
       v.push(
         'AUTH_ANON_SALT must be set in production so the anonymous-trial IP hash is stable across restarts and replicas (otherwise the "1 free trial" resets per process).'
+      );
+    }
+    if (signedInMonthlyMax() === null) {
+      v.push(
+        'AUTH_SIGNED_IN_MONTHLY_MAX must be set to a positive integer in production so signed-in beta usage is capped, not merely metered.'
       );
     }
   }

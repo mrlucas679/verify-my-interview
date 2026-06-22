@@ -17,12 +17,17 @@ AI-first product shape:
 
 - `/` is the single Investigation Workspace with one multimodal composer for
   pasted evidence, files, voice, check mode, and report mode.
-- Verify results render as stacked investigation cards.
+- Verify results render as a conversational investigator response with compact
+  inline evidence and bottom-positioned actions.
 - Report mode returns an acknowledgment/reference id only.
-- `/history` replaces the old community/network screen.
+- History is a compact ChatGPT-style conversation rail on desktop and a simple
+  `/history` list on mobile; saved checks reopen with the original submitted
+  message and findings, and saved reports reopen with the original message and
+  acknowledgment.
 - `/network` redirects to `/history`.
 - The public frontend graph UI and `react-force-graph-2d` dependency are gone;
-  prior report matches now render as plain "Similar reports" cards.
+  prior report matches are summarized in the investigation response instead of
+  exposed as a separate network surface.
 - Env-gated Entra PKCE sign-in, account menu, redacted case history, evidence
   consent, POPIA erasure, and admin report moderation are implemented in the
   product surface.
@@ -41,14 +46,22 @@ Latest full product gate:
 
 Known launch caveats:
 
-- `npm run azure:doctor -- --require-live` is not ready in the current terminal:
-  `APPLICATIONINSIGHTS_CONNECTION_STRING` is missing, Azure CLI is unavailable
-  or not logged in, and Azure Search is not configured in the process.
-- Public beta still requires the external P1 launch blockers in
-  [`LIVE_LAUNCH_CHECKLIST.md`](LIVE_LAUNCH_CHECKLIST.md): live Entra tenant/app
-  provisioning, admin role assignment, POPIA contact/Information Officer route,
-  production telemetry, durable storage configuration, and live smoke tests
-  against the deployed URL.
+- Live preview is deployed at `https://vmi-online-3907.azurewebsites.net`.
+- Custom domain and App Service managed TLS are configured at
+  `https://app.verifymyinterview.co.za`.
+- `npm run azure:doctor -- --require-live` and `npm run online:smoke` reported
+  `READY` against the live Azure deployment on 2026-06-22.
+- The fixed custom-domain browser verifier still needs to be run from the
+  owner's PowerShell/browser environment:
+  `npm run azure:verify-live-ui -- -Url https://app.verifymyinterview.co.za`.
+- A public preview without consumer accounts can begin after owner browser smoke
+  passes. Account-based public beta is the next milestone: verify sign-in/sign-out
+  on the custom domain, assign the admin role, and either complete External ID
+  Google/Apple social login or explicitly accept Microsoft-only sign-in for the
+  first beta cohort. Full public launch still requires the remaining P2 items in
+  [`LIVE_LAUNCH_CHECKLIST.md`](LIVE_LAUNCH_CHECKLIST.md): POPIA contact
+  confirmation, Key Vault secret migration, broader live smoke coverage,
+  dashboards, support process, and launch/growth controls.
 
 ---
 
@@ -143,9 +156,11 @@ The reasoning agents must answer from real evidence, not training-data priors.
   so identities of third parties are never ingested, stored, or logged; only
   line type / reputation / domain age reach the scorer.
 - **[done]** **AuthN/AuthZ + access accounting**: Entra JWT validation is
-  env-gated; signed-in usage is metered; anonymous trial checks are bounded by
-  `AUTH_ANON_TRIAL_MAX`; account/case/evidence routes are caller-scoped; admin
-  moderation requires an `admin` role or explicit break-glass allow-list.
+  env-gated; signed-in usage is metered and capped when
+  `AUTH_SIGNED_IN_MONTHLY_MAX` is set; production requires that cap for public
+  beta; anonymous trial checks are bounded by `AUTH_ANON_TRIAL_MAX`;
+  account/case/evidence routes are caller-scoped; admin moderation requires an
+  `admin` role or explicit break-glass allow-list.
 - **[next]** **Adversarial-use response shaping**: rate limits and tool-call
   caps already exist, but anonymous over-limit UX and signal-detail suppression
   should be verified live before public traffic.

@@ -183,12 +183,29 @@ function VerdictActions({ result, report }: { result: AnalyzeResponse; report: R
 }
 
 function UserEvidencePacket({ evidence }: { evidence: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const clean = evidence
+    .replace(/^User message\s*\n+/i, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  const canExpand = clean.length > 900 || clean.split('\n').length > 8;
+  const visible = expanded ? clean : compactEvidence(evidence);
+
   return (
     <div className="flex justify-end">
       <div className="max-w-[90%] rounded-2xl bg-ink-800 px-3.5 py-2.5 shadow-card sm:max-w-[78%]">
-        <p className="max-h-28 overflow-hidden whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
-          {compactEvidence(evidence)}
+        <p className={`${expanded ? '' : 'max-h-28 overflow-hidden'} whitespace-pre-wrap text-sm leading-relaxed text-slate-200`}>
+          {visible}
         </p>
+        {canExpand && (
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="mt-1.5 rounded-md px-1 py-0.5 text-xs text-accent transition hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            {expanded ? 'Show less' : 'Read more'}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -494,6 +511,20 @@ interface ReportAck {
   createdAt: number;
 }
 
+function reportAckFromEntry(entry: CaseEntry): ReportAck {
+  return {
+    id: entry.id,
+    kind: 'report',
+    company: entry.reportCompany ?? 'Saved report',
+    evidence: entry.evidence,
+    reportId: entry.reportId ?? null,
+    reviewStatus: entry.reviewStatus ?? null,
+    status: entry.status === 'error' ? 'error' : 'done',
+    error: entry.error,
+    createdAt: entry.createdAt,
+  };
+}
+
 function ReportAckCard({ ack }: { ack: ReportAck }) {
   if (ack.status === 'error') {
     return (
@@ -631,7 +662,7 @@ export function Workspace() {
         { signal: controller.signal }
       );
       setAcks((prev) => prev.map((ack) => (ack.id === id ? { ...ack, status: 'done', reportId, reviewStatus: status } : ack)));
-      recordReport({ company, evidence, reportId });
+      recordReport({ company, evidence, reportId, reviewStatus: status });
     } catch (error) {
       if (controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : 'Could not file the report.';
@@ -682,7 +713,11 @@ export function Workspace() {
   const reporting = useMemo(() => acks.some((ack) => ack.status === 'submitting'), [acks]);
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [
-      ...entries.map((entry): TimelineItem => ({ type: 'verify', entry, createdAt: entry.createdAt })),
+      ...entries.map((entry): TimelineItem =>
+        entry.kind === 'report'
+          ? { type: 'report', ack: reportAckFromEntry(entry), createdAt: entry.createdAt }
+          : { type: 'verify', entry, createdAt: entry.createdAt }
+      ),
       ...acks.map((ack): TimelineItem => ({ type: 'report', ack, createdAt: ack.createdAt })),
     ];
     return items.sort((a, b) => a.createdAt - b.createdAt);
@@ -719,8 +754,8 @@ export function Workspace() {
 
   if (!active) {
     return (
-      <div className="min-h-[calc(100vh-4rem)] bg-ink-900">
-        <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-2xl flex-col justify-center px-4 py-8 sm:px-6">
+      <div className="min-h-[calc(100vh-3.5rem)] bg-ink-900">
+        <div className="mx-auto flex min-h-[calc(100vh-3.5rem)] max-w-2xl flex-col justify-center px-4 py-8 sm:px-6">
           <div className="mb-6 space-y-3 text-center">
             <h1 className="font-display text-3xl font-semibold tracking-normal text-white sm:text-4xl">
               Verify a job before you trust it
@@ -741,8 +776,8 @@ export function Workspace() {
   }
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] bg-ink-900">
-      <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-3xl flex-col px-4 sm:px-6">
+    <div className="min-h-[calc(100vh-3.5rem)] bg-ink-900">
+      <div className="mx-auto flex min-h-[calc(100vh-3.5rem)] max-w-3xl flex-col px-4 sm:px-6">
         <div className="flex-1 py-4 sm:py-5">
           <h1 className="sr-only">Current investigation</h1>
 

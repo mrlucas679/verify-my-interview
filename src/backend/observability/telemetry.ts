@@ -21,6 +21,12 @@ function connectionString(): string {
   return process.env.APPLICATIONINSIGHTS_CONNECTION_STRING?.trim() ?? '';
 }
 
+function usableConnectionString(): boolean {
+  const value = connectionString();
+  if (!value || value.includes('<') || value.includes('>')) return false;
+  return /(^|;)InstrumentationKey=/i.test(value);
+}
+
 function cleanAttributeValue(value: TelemetryValue): TelemetryValue {
   if (typeof value !== 'string') return value;
   return value.length > MAX_ATTRIBUTE_TEXT ? value.slice(0, MAX_ATTRIBUTE_TEXT) : value;
@@ -35,7 +41,7 @@ function cleanAttributes(attributes: TelemetryAttributes): TelemetryAttributes {
 }
 
 export function azureMonitorConfigured(): boolean {
-  return Boolean(connectionString()) && !telemetryDisabled();
+  return usableConnectionString() && !telemetryDisabled();
 }
 
 export function azureMonitorStatus(): {

@@ -5,6 +5,24 @@ Last updated: 2026-06-22
 These are the launch items that cannot be completed by code or Azure CLI alone.
 They require the product owner to control DNS and identity-provider accounts.
 
+## Current Status
+
+As of 2026-06-22, the Azure live preview is deployed and the production
+subdomain is bound:
+
+```text
+https://vmi-online-3907.azurewebsites.net
+https://app.verifymyinterview.co.za
+```
+
+The domain records have propagated, `npm run azure:domain -- -HostName
+app.verifymyinterview.co.za` completed, and App Service managed TLS is bound.
+Run the live UI verifier after each live deploy:
+
+```powershell
+npm run azure:verify-live-ui -- -Url https://app.verifymyinterview.co.za
+```
+
 ## 1. Custom Domain
 
 Official Microsoft guidance: App Service custom domains need a domain mapping
@@ -61,12 +79,15 @@ npm run azure:domain -- -HostName yourdomain.com -RootDomain -DnsOnly
 After DNS is correct, rerun the same command without `-DnsOnly` to bind the host
 and create an App Service managed certificate.
 
+Current production subdomain status: complete for
+`app.verifymyinterview.co.za`.
+
 ## 2. Real User Auth
 
-The backend can validate Microsoft Entra tokens, meter signed-in users, and store
-case history. Do not enable `AUTH_ISSUER` and `AUTH_AUDIENCE` in production until
-the frontend sign-in UI is enabled; otherwise users can hit trial/account states
-without a way to sign in.
+The backend can validate Microsoft Entra tokens, cap/meter signed-in users, and
+store case history. Do not enable `AUTH_ISSUER` and `AUTH_AUDIENCE` in production
+until the frontend sign-in UI is enabled; otherwise users can hit trial/account
+states without a way to sign in.
 
 Official Microsoft guidance:
 
@@ -105,25 +126,49 @@ In the External ID tenant:
    - Issuer URL from OpenID configuration
    - Scope URL: `api://<client-id>/access_as_user`
 
+For the current owner preview, the live deploy automation can create/reuse an
+Entra app registration named `vmi-online-3907-auth` in the existing Azure tenant
+and wire `AUTH_AUDIENCE` plus `VITE_AUTH_*`. For a true consumer public beta,
+replace that with the External ID tenant and Google/Apple social providers so
+ordinary job seekers can sign in.
+
+### Consumer-account launch options
+
+- **Anonymous public preview now:** allow users to run the anonymous free trial
+  and submit reports on `https://app.verifymyinterview.co.za`; keep account
+  sign-in as a monitored beta feature.
+- **Microsoft-only account beta:** keep the generated Entra app registration and
+  verify sign-in/sign-out, `/me`, history, evidence consent, and account deletion
+  on the custom domain before inviting a small cohort.
+- **General consumer account beta:** create/use the External ID tenant, configure
+  Google and Apple social sign-in, update the app registration values below, run
+  `npm run azure:continue-live`, then rerun live UI and auth smoke tests.
+
 ### Backend settings
 
 After frontend sign-in is ready, set these on both canary and production:
+
+Replace every angle-bracket value below with the real Azure/Entra value. The
+readiness doctor and deploy script reject copied placeholders such as
+`<app-insights-connection-string>` because they look non-empty but are not usable
+production configuration.
 
 ```powershell
 $issuer = "https://<external-id-tenant>.ciamlogin.com/<tenant-id>/v2.0"
 $clientId = "<application-client-id>"
 $audience = "$clientId,api://$clientId"
 $salt = "<generate-a-long-random-value>"
+$monthlyCap = "25"
 
 az webapp config appsettings set `
   -g rg-kkgawatlh9-6623 `
   -n vmi-api-3907 `
-  --settings AUTH_ISSUER=$issuer AUTH_AUDIENCE=$audience AUTH_ANON_SALT=$salt AUTH_ANON_TRIAL_MAX=1
+  --settings AUTH_ISSUER=$issuer AUTH_AUDIENCE=$audience AUTH_ANON_SALT=$salt AUTH_ANON_TRIAL_MAX=1 AUTH_SIGNED_IN_MONTHLY_MAX=$monthlyCap
 
 az webapp config appsettings set `
   -g rg-kkgawatlh9-6623 `
   -n vmi-online-3907 `
-  --settings AUTH_ISSUER=$issuer AUTH_AUDIENCE=$audience AUTH_ANON_SALT=$salt AUTH_ANON_TRIAL_MAX=1
+  --settings AUTH_ISSUER=$issuer AUTH_AUDIENCE=$audience AUTH_ANON_SALT=$salt AUTH_ANON_TRIAL_MAX=1 AUTH_SIGNED_IN_MONTHLY_MAX=$monthlyCap
 ```
 
 Then confirm:

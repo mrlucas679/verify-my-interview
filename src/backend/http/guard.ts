@@ -218,10 +218,10 @@ export function resetRateLimits(): void {
 
 /**
  * Conservative headers for an API + same-origin SPA. CSP allows exactly what
- * the built frontend uses: self-hosted scripts, Google Fonts stylesheets,
- * inline styles (React style attributes), data: images (canvas/graph),
- * same-origin fetches, and the exact configured Entra CIAM origin for PKCE token
- * calls when auth is enabled.
+ * the built frontend uses: self-hosted scripts, inline styles (React style
+ * attributes), system/self-hosted fonts, data: images (canvas/graph),
+ * same-origin fetches, and the exact configured Entra CIAM origin for PKCE
+ * token calls when auth is enabled.
  */
 function ciamConnectSources(): string[] {
   const sources = new Set<string>(["'self'"]);
@@ -252,8 +252,8 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
     [
       "default-src 'self'",
       "script-src 'self'",
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-      'font-src https://fonts.gstatic.com',
+      "style-src 'self' 'unsafe-inline'",
+      "font-src 'self'",
       "img-src 'self' data: blob:",
       `connect-src ${ciamConnectSources().join(' ')}`,
       "object-src 'none'",

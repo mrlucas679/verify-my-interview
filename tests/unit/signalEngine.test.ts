@@ -73,4 +73,37 @@ describe('deriveSignals — channel-aware domain signals', () => {
     expect(signals.map((signal) => signal.id)).toContain('has_mx');
     expect(signals.map((signal) => signal.id)).not.toContain('no_mx_records');
   });
+
+  it('does not mistake a South African salary range for an up-front payment request', () => {
+    const entities: Entities = {
+      ...cleanEntities,
+      companies: ['Perzulu (Pty) Ltd'],
+      emails: ['admin@perzulu.co.za'],
+      domains: ['perzulu.co.za'],
+      job_titles: ['Builder/Bricklayer'],
+    };
+
+    const signals = deriveSignals(
+      [
+        'Perzulu (Pty) Ltd is seeking a qualified Builder (Bricklayer).',
+        'Interested candidates should submit a detailed CV, certified qualifications, proof of experience, and a certified copy of their South African ID.',
+        'Pay: R5 393,75 - R32 822,71 per month.',
+        'Work Location: In person.',
+      ].join(' '),
+      entities,
+      []
+    );
+
+    expect(signals.map((signal) => signal.id)).not.toContain('upfront_payment_request');
+  });
+
+  it('still flags a direct South African training-fee payment demand', () => {
+    const signals = deriveSignals(
+      'You must pay R850 training fee before starting the job.',
+      cleanEntities,
+      []
+    );
+
+    expect(signals.map((signal) => signal.id)).toContain('upfront_payment_request');
+  });
 });

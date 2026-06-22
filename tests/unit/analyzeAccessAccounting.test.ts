@@ -2,7 +2,9 @@ jest.mock('../../src/backend/data/cosmos', () => ({
   cosmosEnabled: jest.fn(),
   consumeAnonTrial: jest.fn(),
   recordUsage: jest.fn(),
+  reserveUsage: jest.fn(),
   rollbackAnonTrial: jest.fn(),
+  rollbackUsage: jest.fn(),
   upsertUser: jest.fn(),
 }));
 
@@ -15,17 +17,20 @@ import {
   cosmosEnabled,
   recordUsage,
   rollbackAnonTrial,
+  rollbackUsage,
 } from '../../src/backend/data/cosmos';
 
 const mockedCosmosEnabled = cosmosEnabled as jest.MockedFunction<typeof cosmosEnabled>;
 const mockedRecordUsage = recordUsage as jest.MockedFunction<typeof recordUsage>;
 const mockedRollbackAnonTrial = rollbackAnonTrial as jest.MockedFunction<typeof rollbackAnonTrial>;
+const mockedRollbackUsage = rollbackUsage as jest.MockedFunction<typeof rollbackUsage>;
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockedCosmosEnabled.mockReturnValue(true);
   mockedRecordUsage.mockResolvedValue({ period: '2026-06', count: 1 });
   mockedRollbackAnonTrial.mockResolvedValue(undefined);
+  mockedRollbackUsage.mockResolvedValue(undefined);
 });
 
 describe('analyze access accounting', () => {
@@ -50,6 +55,43 @@ describe('analyze access accounting', () => {
     await commitAnalyzeAccess(req);
 
     expect(mockedRecordUsage).not.toHaveBeenCalled();
+  });
+
+  it('does not double-meter a signed-in quota reservation', async () => {
+    const req = {
+      analyzeAccess: {
+        kind: 'signed_in',
+        userId: 'user-1',
+        reserved: true,
+        durable: true,
+        period: '2026-06',
+        quotaMax: 20,
+      },
+    } as AuthedRequest;
+
+    await commitAnalyzeAccess(req);
+
+    expect(mockedRecordUsage).not.toHaveBeenCalled();
+  });
+
+  it('rolls back a durable signed-in quota reservation once', async () => {
+    const req = {
+      analyzeAccess: {
+        kind: 'signed_in',
+        userId: 'user-1',
+        reserved: true,
+        durable: true,
+        period: '2026-06',
+        quotaMax: 20,
+      },
+    } as AuthedRequest;
+
+    await rollbackAnalyzeAccess(req);
+    await rollbackAnalyzeAccess(req);
+
+    expect(mockedRollbackUsage).toHaveBeenCalledTimes(1);
+    expect(mockedRollbackUsage).toHaveBeenCalledWith('user-1', '2026-06');
+    expect(req.analyzeAccess).toMatchObject({ reserved: false });
   });
 
   it('rolls back a durable anonymous reservation once and marks it released', async () => {

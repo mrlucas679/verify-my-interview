@@ -2,6 +2,9 @@ import { execFileSync, type ExecFileSyncOptionsWithStringEncoding } from 'child_
 import fs from 'fs';
 import path from 'path';
 
+import { authEnabled } from '../auth/identity';
+import { signedInMonthlyMax } from '../auth/quota';
+import { cosmosEnabled } from '../data/cosmos';
 import { healthSnapshot } from '../local/appTools';
 
 export type DoctorLevel = 'pass' | 'warn' | 'fail';
@@ -29,6 +32,12 @@ const LIVE_ENV_KEYS = [
   'AZURE_AI_PROJECT_ENDPOINT',
   'AZURE_AI_MODEL_DEPLOYMENT',
   'APPLICATIONINSIGHTS_CONNECTION_STRING',
+  'TRUST_PROXY',
+  'AUTH_ISSUER',
+  'AUTH_AUDIENCE',
+  'AUTH_SIGNED_IN_MONTHLY_MAX',
+  'COSMOS_CONNECTION_STRING',
+  'AUTH_ANON_SALT',
 ];
 
 function check(name: string, level: DoctorLevel, detail: string): DoctorCheck {
@@ -37,6 +46,29 @@ function check(name: string, level: DoctorLevel, detail: string): DoctorCheck {
 
 function projectFile(cwd: string, file: string): string {
   return path.join(cwd, file);
+}
+
+function envValue(name: string): string {
+  return process.env[name]?.trim() ?? '';
+}
+
+function usableEnv(name: string): boolean {
+  const value = envValue(name);
+  return Boolean(value) && !value.includes('<') && !value.includes('>');
+}
+
+function validHttpsUrlEnv(name: string): boolean {
+  if (!usableEnv(name)) return false;
+  try {
+    return new URL(envValue(name)).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function validAppInsightsEnv(): boolean {
+  return usableEnv('APPLICATIONINSIGHTS_CONNECTION_STRING')
+    && /(^|;)InstrumentationKey=/i.test(envValue('APPLICATIONINSIGHTS_CONNECTION_STRING'));
 }
 
 function readJsonFile(file: string): Record<string, unknown> {
@@ -80,20 +112,22 @@ function dockerfileChecks(cwd: string): DoctorCheck[] {
 
 function envChecks(requireLive: boolean): DoctorCheck[] {
   const health = healthSnapshot();
+  const foundryReady = validHttpsUrlEnv('AZURE_AI_PROJECT_ENDPOINT') && usableEnv('AZURE_AI_MODEL_DEPLOYMENT');
+  const authReady = validHttpsUrlEnv('AUTH_ISSUER') && usableEnv('AUTH_AUDIENCE');
   const checks: DoctorCheck[] = [
     check(
       'foundry:configured',
-      health.subsystems.foundry_agents ? 'pass' : requireLive ? 'fail' : 'warn',
-      health.subsystems.foundry_agents
+      foundryReady ? 'pass' : requireLive ? 'fail' : 'warn',
+      foundryReady
         ? 'Azure AI Foundry endpoint is configured'
-        : 'AZURE_AI_PROJECT_ENDPOINT is not configured'
+        : 'AZURE_AI_PROJECT_ENDPOINT/AZURE_AI_MODEL_DEPLOYMENT are not real configured values'
     ),
     check(
       'observability:azure-monitor',
-      health.subsystems.azure_monitor ? 'pass' : requireLive ? 'fail' : 'warn',
-      health.subsystems.azure_monitor
-        ? 'Application Insights connection string is configured'
-        : 'APPLICATIONINSIGHTS_CONNECTION_STRING is not configured'
+      validAppInsightsEnv() ? 'pass' : requireLive ? 'fail' : 'warn',
+      validAppInsightsEnv()
+        ? 'Application Insights connection string looks valid'
+        : 'APPLICATIONINSIGHTS_CONNECTION_STRING is missing or still a placeholder'
     ),
     check(
       'search:scam-network',
@@ -104,12 +138,47 @@ function envChecks(requireLive: boolean): DoctorCheck[] {
     ),
   ];
 
+  checks.push(
+    check(
+      'auth:configured',
+      authReady && authEnabled() ? 'pass' : requireLive ? 'fail' : 'warn',
+      authReady && authEnabled()
+        ? 'Bearer-token auth is configured'
+        : 'AUTH_ISSUER/AUTH_AUDIENCE are missing or still placeholders'
+    ),
+    check(
+      'auth:signed-in-quota',
+      signedInMonthlyMax() !== null ? 'pass' : requireLive ? 'fail' : 'warn',
+      signedInMonthlyMax() !== null
+        ? `Signed-in monthly cap is ${signedInMonthlyMax()}`
+        : 'AUTH_SIGNED_IN_MONTHLY_MAX is not a positive integer'
+    ),
+    check(
+      'data:cosmos',
+      usableEnv('COSMOS_CONNECTION_STRING') && cosmosEnabled() ? 'pass' : requireLive ? 'fail' : 'warn',
+      usableEnv('COSMOS_CONNECTION_STRING') && cosmosEnabled()
+        ? 'Cosmos durable store is configured'
+        : 'COSMOS_CONNECTION_STRING is missing or still a placeholder'
+    ),
+    check(
+      'report:write-policy',
+      usableEnv('VMI_REPORT_API_KEY') || process.env.VMI_ALLOW_PUBLIC_REPORTS === '1'
+        ? 'pass'
+        : requireLive
+          ? 'fail'
+          : 'warn',
+      usableEnv('VMI_REPORT_API_KEY') || process.env.VMI_ALLOW_PUBLIC_REPORTS === '1'
+        ? 'Production report-write policy is explicit'
+        : 'Set VMI_REPORT_API_KEY or VMI_ALLOW_PUBLIC_REPORTS=1'
+    )
+  );
+
   for (const key of LIVE_ENV_KEYS) {
     checks.push(
       check(
         `env:${key}`,
-        process.env[key]?.trim() ? 'pass' : requireLive ? 'fail' : 'warn',
-        process.env[key]?.trim() ? `${key} is set` : `${key} is not set`
+        usableEnv(key) ? 'pass' : requireLive ? 'fail' : 'warn',
+        usableEnv(key) ? `${key} is set` : `${key} is missing or still a placeholder`
       )
     );
   }

@@ -393,10 +393,10 @@ export async function deleteUserData(userId: string): Promise<{ evidenceIds: str
   return { evidenceIds };
 }
 
-// ── Usage metering (free tier) ───────────────────────────────────────────────
-// Per-user, per-calendar-month counter. Today usage is METERED but NOT capped
-// (free tier = unlimited for now); the count is recorded so a hard cap can be
-// switched on later without a migration.
+// ── Usage metering + signed-in quota (free tier) ─────────────────────────────
+// Per-user, per-calendar-month counter. The same atomic counter supports passive
+// metering and an optional hard cap (`AUTH_SIGNED_IN_MONTHLY_MAX`) by reserving a
+// usage slot before analysis and rolling it back when the request fails.
 
 function usagePeriod(now = new Date()): string {
   return now.toISOString().slice(0, 7); // YYYY-MM
@@ -419,6 +419,31 @@ export async function recordUsage(userId: string): Promise<{ period: string; cou
     { upsert: true, returnDocument: 'after' }
   );
   return { period, count: res?.count ?? 1 };
+}
+
+/** Atomically reserve one signed-in check, returning whether the cap allows it. */
+export async function reserveUsage(
+  userId: string,
+  maxChecks: number
+): Promise<{ allowed: boolean; period: string; count: number }> {
+  const db = await getPiiDb();
+  const period = usagePeriod();
+  const res = await db.collection<UsageDoc>(USAGE).findOneAndUpdate(
+    { _id: `${userId}:${period}` },
+    { $inc: { count: 1 }, $set: { userId, period } },
+    { upsert: true, returnDocument: 'after' }
+  );
+  const count = (res as UsageDoc | null)?.count ?? 1;
+  return { allowed: count <= maxChecks, period, count };
+}
+
+/** Release a reserved signed-in check after a failed/aborted analysis. */
+export async function rollbackUsage(userId: string, period = usagePeriod()): Promise<void> {
+  const db = await getPiiDb();
+  await db.collection<UsageDoc>(USAGE).updateOne(
+    { _id: `${userId}:${period}`, userId, count: { $gt: 0 } },
+    { $inc: { count: -1 } }
+  );
 }
 
 export async function getUsage(userId: string): Promise<{ period: string; count: number }> {

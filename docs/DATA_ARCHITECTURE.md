@@ -21,8 +21,9 @@ Frictionless, ChatGPT/Claude-style onboarding — **no usernames/passwords**.
   validates the JWT; Microsoft handles credential security. Sign-up/login in seconds.
 - **Roles:** `user` (free) → `premium` → `analyst`/`admin` (future).
 - **Freemium model (current policy):**
-  - **Signed-in users** — unlimited checks for now; usage is metered monthly so a
-    future cap or premium tier can be enabled without migration.
+  - **Signed-in users** — usage is metered monthly and capped by
+    `AUTH_SIGNED_IN_MONTHLY_MAX` for public beta. Unset keeps local/dev behavior
+    unlimited; production fails fast until a positive cap is configured.
   - **Anonymous visitors** — `AUTH_ANON_TRIAL_MAX` trial checks (default `1`) before
     the API returns `trial_exhausted`.
   - **Premium/billing** — deferred. Usage records and plan fields are already in
@@ -102,11 +103,11 @@ removes the current "Search is the only store" fragility.
    (`auth/identity.ts`, Google/Apple as Entra social IdPs); `attachIdentity` +
    `enforceAnalyzeAccess` + `requireAuth` (`auth/middleware.ts`); `users` + `cases`
    + `usage` collections (PII-residency hook `COSMOS_PII_CONNECTION_STRING` → SA
-   North, falls back to main); consent capture on `users`; **usage metering** at
-   `/analyze`. **Policy (decided 2026-06-18):** signed-in = **unlimited** (metered,
-   not capped); anonymous = **1 trial check** (`AUTH_ANON_TRIAL_MAX`) then sign-in.
-   **Deferred:** premium tier, **billing (Stripe)**, and the usage hard-cap (the
-   meter is in place to switch it on without migration). _(implemented)_
+   North, falls back to main); consent capture on `users`; **usage metering +
+   signed-in quota reservation** at `/analyze`. **Policy (updated 2026-06-22):**
+   signed-in = capped by `AUTH_SIGNED_IN_MONTHLY_MAX` in production; anonymous =
+   **1 trial check** (`AUTH_ANON_TRIAL_MAX`) then sign-in. **Deferred:** premium
+   tier and **billing (Stripe)**. _(implemented)_
 4. ✅ **Evidence Blob:** consented private storage (`storage/blob.ts`, managed
    identity or connection string), ownership-scoped reads, erasure via `DELETE /me`.
    12-month retention = a Blob lifecycle rule (infra). _(implemented)_
@@ -117,7 +118,11 @@ removes the current "Search is the only store" fragility.
    consent, POPIA erasure; hybrid History that merges local browser entries with
    `/cases` redacted snapshots; one-composer evidence retention that stores
    consented files via `/evidence` and links returned `evidenceIds` to `/analyze`;
-   admin moderation queue at `/admin/reports`. _(implemented 2026-06-20)_
+   ChatGPT-style history rail/list that reopens local checks with the original
+   pasted message, reopens local reports with the original message and receipt,
+   and merges account cases as redacted snapshots when the original evidence is
+   not stored by design; admin moderation queue at `/admin/reports`.
+   _(implemented 2026-06-20, conversation history updated 2026-06-22)_
 
 **Endpoints added (slices ③–④):** `GET /me`, `DELETE /me` (self-service erasure),
 `PUT /me/consent` (evidence-storage consent), `GET /cases`, `GET /cases/:id`,
@@ -149,10 +154,11 @@ Until then the code is inert and the app runs exactly as before.
 ## 8. Decisions
 
 **Resolved:** auth = Entra External ID with **Google + Apple** social sign-in
-(frictionless, no passwords); signed-in checks = **unlimited and metered** for now;
-anonymous trial = `AUTH_ANON_TRIAL_MAX` (default `1`); PII residency = **South
-Africa North**; retention = **12 months evidence / 90 days audit**; public reports
-= **pending review** until approved by an admin.
+(frictionless, no passwords); signed-in checks are **metered and capped** by
+`AUTH_SIGNED_IN_MONTHLY_MAX` for public beta; anonymous trial =
+`AUTH_ANON_TRIAL_MAX` (default `1`); PII residency = **South Africa North**;
+retention = **12 months evidence / 90 days audit**; public reports = **pending
+review** until approved by an admin.
 
 **Still deferred:** premium tier, billing provider integration (recommend
 **Stripe**), Functions-based Service Bus consumer with dead-letter/reconciliation,

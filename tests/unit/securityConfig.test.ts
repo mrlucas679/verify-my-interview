@@ -17,6 +17,7 @@ const KEYS = [
   'AUTH_AUDIENCE',
   'COSMOS_CONNECTION_STRING',
   'AUTH_ANON_SALT',
+  'AUTH_SIGNED_IN_MONTHLY_MAX',
   'APPLICATIONINSIGHTS_CONNECTION_STRING',
   'AUTH_ADMIN_EMAILS',
   'ALLOW_INSECURE',
@@ -46,6 +47,7 @@ function secureProd(): void {
   process.env.AUTH_AUDIENCE = 'api-client-id';
   process.env.COSMOS_CONNECTION_STRING = 'mongodb://localhost:10255/?ssl=true';
   process.env.AUTH_ANON_SALT = 'stable-salt';
+  process.env.AUTH_SIGNED_IN_MONTHLY_MAX = '25';
   process.env.VMI_REPORT_API_KEY = 'report-key';
 }
 
@@ -62,7 +64,7 @@ describe('securityConfigViolations', () => {
     expect(v.some((x) => x.includes('AUTH_ISSUER'))).toBe(true);
   });
 
-  it('with auth enabled, requires a durable store and a stable anon salt', () => {
+  it('with auth enabled, requires a durable store, stable anon salt, and signed-in cap', () => {
     process.env.NODE_ENV = 'production';
     process.env.TRUST_PROXY = '1';
     process.env.AUTH_ISSUER = 'https://tenant.ciamlogin.com/x/v2.0';
@@ -70,8 +72,15 @@ describe('securityConfigViolations', () => {
     const v = securityConfigViolations();
     expect(v.some((x) => x.includes('COSMOS_CONNECTION_STRING'))).toBe(true);
     expect(v.some((x) => x.includes('AUTH_ANON_SALT'))).toBe(true);
+    expect(v.some((x) => x.includes('AUTH_SIGNED_IN_MONTHLY_MAX'))).toBe(true);
     expect(v.some((x) => x.includes('TRUST_PROXY'))).toBe(false);
     expect(v.some((x) => x.includes('AUTH_ISSUER'))).toBe(false);
+  });
+
+  it('rejects non-positive signed-in production quotas', () => {
+    secureProd();
+    process.env.AUTH_SIGNED_IN_MONTHLY_MAX = '0';
+    expect(securityConfigViolations().some((x) => x.includes('AUTH_SIGNED_IN_MONTHLY_MAX'))).toBe(true);
   });
 
   it('is empty when production is fully configured', () => {

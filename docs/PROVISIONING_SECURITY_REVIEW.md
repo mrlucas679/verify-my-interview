@@ -76,6 +76,7 @@ Legend: **[now]** do before/at provisioning · **[launch]** before public launch
     key. Key Vault + rotation is the mitigation; do not paste it into app config.
   - Provider keys: `WHOISJSON_API_KEY`, `ABSTRACT_*`, `SERPAPI_API_KEY`, etc.
   - `AUTH_ANON_SALT` — a stable random value so anon-trial hashes survive restarts.
+  - `AUTH_SIGNED_IN_MONTHLY_MAX` — the public-beta monthly free-check cap.
 - **[post]** Enable Key Vault secret rotation reminders / events.
 
 ## 5. Cosmos DB
@@ -102,9 +103,10 @@ Legend: **[now]** do before/at provisioning · **[launch]** before public launch
 - **[now]** `NODE_ENV=production` and **`TRUST_PROXY=1`** (behind ingress, so rate
   limiting + the anon-trial gate use the real client IP, not the proxy hop).
 - **[now]** Set `AUTH_ISSUER`, `AUTH_AUDIENCE`, `COSMOS_CONNECTION_STRING`,
-  `AUTH_ANON_SALT`, `APPLICATIONINSIGHTS_CONNECTION_STRING`. The server **refuses to
-  boot** without the security-critical ones (unless `ALLOW_INSECURE=1`, an audited
-  emergency escape hatch). _Principle:_ fail fast over silent degradation.
+  `AUTH_ANON_SALT`, `AUTH_SIGNED_IN_MONTHLY_MAX`,
+  `APPLICATIONINSIGHTS_CONNECTION_STRING`. The server **refuses to boot** without
+  the security-critical ones (unless `ALLOW_INSECURE=1`, an audited emergency
+  escape hatch). _Principle:_ fail fast over silent degradation.
 - **[now]** Single replica until a **shared rate-limit/anon-trial store** exists, OR
   accept that per-IP limits multiply per replica (`http/guard.ts` notes the Redis
   swap). The durable anon-trial path (Cosmos) already works cross-replica; only the
@@ -122,7 +124,7 @@ Legend: **[now]** do before/at provisioning · **[launch]** before public launch
 - Shared rate-limit store (Redis) for horizontal scale.
 - Functions event consumer + dead-letter + reconciliation job.
 - Stable audit-log salt from Key Vault (cross-replica abuse correlation).
-- Premium tier + billing + usage hard-cap (the meter is already in place to flip on).
+- Premium tier + billing.
 
 ---
 
@@ -132,7 +134,8 @@ Legend: **[now]** do before/at provisioning · **[launch]** before public launch
    failures). Removing `TRUST_PROXY` or auth vars → boot **refused** (already
    runtime-verified in dev).
 2. Anonymous `/analyze` allowed once per client IP, then `401 trial_exhausted`.
-3. Signed-in `/analyze` unlimited; `GET /me` shows incrementing usage.
+3. Signed-in `/analyze` respects `AUTH_SIGNED_IN_MONTHLY_MAX`; `GET /me` shows
+   incrementing usage.
 4. `DELETE /reports/:id`: 403 for non-admin, 200 for the `admin` role; break-glass
    use logged.
 5. Cross-user `GET /evidence/:fileId` → 404. `DELETE /me` removes cases + blobs.

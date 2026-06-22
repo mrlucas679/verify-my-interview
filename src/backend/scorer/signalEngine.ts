@@ -570,7 +570,12 @@ export function deriveSignals(
     ) ||
     evidence.match(/\b(?:fee|deposit|pay(?:ment)?)\b[^.\n]{0,25}\bR\s?\d[\d,. ]*/i) ||
     evidence.match(/\bR\s?\d[\d,. ]*[^.\n]{0,25}\b(?:fee|deposit|non-?refundable|to start|to begin)\b/i);
-  if (feeCue && !isNegatedPaymentCue(evidence, feeCue[0]) && !has('upfront_payment_request')) {
+  if (
+    feeCue &&
+    !isNegatedPaymentCue(evidence, feeCue[0]) &&
+    !isCandidatePaidBenefitContext(evidence, feeCue[0]) &&
+    !has('upfront_payment_request')
+  ) {
     signals.push({
       id: 'upfront_payment_request',
       label: 'Up-front payment requested',

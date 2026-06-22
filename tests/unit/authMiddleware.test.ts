@@ -20,6 +20,7 @@ import {
 const ENV_KEYS = [
   'AUTH_ISSUER',
   'AUTH_AUDIENCE',
+  'AUTH_SIGNED_IN_MONTHLY_MAX',
   'AUTH_ANON_TRIAL_MAX',
   'COSMOS_CONNECTION_STRING',
 ] as const;
@@ -104,12 +105,46 @@ describe('enforceAnalyzeAccess', () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it('always allows a signed-in user (unlimited, metered-not-capped)', async () => {
+  it('allows a signed-in user without a configured cap', async () => {
     enableAuth();
     const req = mockReq({ identity: { userId: 'u-1', roles: [] } });
     const next = jest.fn();
     await enforceAnalyzeAccess(req, mockRes() as unknown as Response, next);
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks a signed-in user after the configured monthly cap', async () => {
+    enableAuth();
+    process.env.AUTH_SIGNED_IN_MONTHLY_MAX = '1';
+    const identity = { userId: 'quota-user-1', roles: [] };
+    const next1 = jest.fn();
+    await enforceAnalyzeAccess(mockReq({ identity }), mockRes() as unknown as Response, next1);
+    expect(next1).toHaveBeenCalledTimes(1);
+
+    const next2 = jest.fn();
+    const res2 = mockRes();
+    await enforceAnalyzeAccess(mockReq({ identity }), res2 as unknown as Response, next2);
+    expect(next2).not.toHaveBeenCalled();
+    expect(res2.statusCode).toBe(429);
+    expect((res2.body as { code?: string }).code).toBe('quota_exhausted');
+  });
+
+  it('releases a signed-in quota reservation when analysis fails', async () => {
+    enableAuth();
+    process.env.AUTH_SIGNED_IN_MONTHLY_MAX = '1';
+    const identity = { userId: 'quota-user-rollback', roles: [] };
+    const req1 = mockReq({ identity });
+    const next1 = jest.fn();
+    await enforceAnalyzeAccess(req1, mockRes() as unknown as Response, next1);
+    expect(next1).toHaveBeenCalledTimes(1);
+
+    await rollbackAnalyzeAccess(req1);
+
+    const next2 = jest.fn();
+    const res2 = mockRes();
+    await enforceAnalyzeAccess(mockReq({ identity }), res2 as unknown as Response, next2);
+    expect(next2).toHaveBeenCalledTimes(1);
+    expect(res2.statusCode).toBe(200);
   });
 
   it('allows the first anonymous trial then blocks the second with 401', async () => {

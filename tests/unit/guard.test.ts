@@ -152,4 +152,12 @@ describe('securityHeaders', () => {
     expect(csp).toContain("connect-src 'self'");
     expect(csp).not.toContain('evil.example.test');
   });
+
+  it('does not depend on remote font stylesheet origins', () => {
+    const csp = cspForEnv();
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("font-src 'self'");
+    expect(csp).not.toContain('fonts.googleapis.com');
+    expect(csp).not.toContain('fonts.gstatic.com');
+  });
 });

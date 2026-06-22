@@ -39,7 +39,7 @@ Sub-agent tracks covered:
   - Dirty refresh handling reruns when writes land during an active refresh.
 - Account erasure now collects evidence IDs across all matching cases instead of only the first bounded page.
 - Added a server-side `/analyze` deadline (`VMI_ANALYZE_TIMEOUT_MS`, default 85s) with abort propagation through the orchestrator, Foundry turns, URL unwrapping, provider adapters, Azure OpenAI embeddings, Azure Search, and web/phone/domain/company checks.
-- Changed free-trial/usage accounting to reserve anonymous access before analysis, roll it back on validation/timeout/failure, and meter signed-in usage only after a successful completed investigation.
+- Changed free-trial/usage accounting to reserve anonymous access before analysis, roll it back on validation/timeout/failure, meter uncapped signed-in usage only after a successful completed investigation, and enforce capped signed-in beta quotas with reservation/rollback.
 - Added a durable Cosmos graph-revision marker so replicas can detect report-corpus changes even when a Service Bus event is missed or a local graph cache is still warm.
 - Made production `/report` fail closed unless `VMI_REPORT_API_KEY` is configured or `VMI_ALLOW_PUBLIC_REPORTS=1` is set deliberately; the production boot guard enforces that policy.
 - Added a public-report moderation queue: untrusted public reports are stored as `pending_review` and do not enter Search, Cosmos graph intelligence, or scoring until an admin approves them. Admins can list pending reports and approve/reject them through guarded moderation endpoints.
@@ -53,7 +53,7 @@ Sub-agent tracks covered:
 - `tests/unit/reporterAgent.test.ts`: mocked Foundry contradiction/unsafe-action fallback.
 - Updated `tests/unit/networkAgent.test.ts`: repeated unverified network reports no longer score as infrastructure corroboration.
 - Updated `tests/unit/authMiddleware.test.ts`: failed anonymous analysis releases its reserved trial.
-- Added `tests/unit/analyzeAccessAccounting.test.ts`: signed-in usage is metered only on commit, disabled accounting stays quiet, and anonymous rollback is idempotent.
+- Added `tests/unit/analyzeAccessAccounting.test.ts`: signed-in usage is metered only on commit, capped reservations are not double-metered, signed-in quota rollback is idempotent, disabled accounting stays quiet, and anonymous rollback is idempotent.
 - Added `tests/unit/analyzeAbort.test.ts`: pre-aborted local/orchestrator analysis stops before pipeline work and tool calls do not reach providers after abort.
 - Updated `tests/unit/cosmos.test.ts`: anonymous rollback and graph revision marker coverage.
 - Updated `tests/unit/securityConfig.test.ts`: production report-write policy coverage.

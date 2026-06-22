@@ -34,7 +34,9 @@ import {
   listPendingReports,
   listReports,
   recordUsage,
+  reserveUsage,
   rollbackAnonTrial,
+  rollbackUsage,
   savePendingReport,
   saveReport,
   saveSharedReport,
@@ -199,6 +201,21 @@ describe('usage metering', () => {
   it('getUsage returns 0 when no record exists', async () => {
     coll.findOne.mockResolvedValue(null);
     expect((await getUsage('u-1')).count).toBe(0);
+  });
+
+  it('reserves signed-in quota atomically and reports whether the cap allows it', async () => {
+    coll.findOneAndUpdate.mockResolvedValue({ count: 2 });
+    await expect(reserveUsage('u-1', 2)).resolves.toMatchObject({ allowed: true, count: 2 });
+    coll.findOneAndUpdate.mockResolvedValue({ count: 3 });
+    await expect(reserveUsage('u-1', 2)).resolves.toMatchObject({ allowed: false, count: 3 });
+  });
+
+  it('rolls back a reserved signed-in quota slot', async () => {
+    await rollbackUsage('u-1', '2026-06');
+    expect(coll.updateOne).toHaveBeenCalledWith(
+      { _id: 'u-1:2026-06', userId: 'u-1', count: { $gt: 0 } },
+      { $inc: { count: -1 } }
+    );
   });
 });
 

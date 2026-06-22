@@ -21,13 +21,19 @@ const MAX_HISTORY_STORAGE_CHARS = 4_500_000;
  *  can sit stacked (running / done / error) without clobbering one another. */
 export interface CaseEntry {
   id: string;
+  kind?: 'check' | 'report';
   evidence: string;
   status: 'running' | 'done' | 'error';
   result: AnalyzeResponse | null;
   error: string | null;
   errorCode?: string;
+  reportId?: string;
+  reportCompany?: string;
+  reviewStatus?: ReportReviewStatus | null;
   createdAt: number;
 }
+
+export type ReportReviewStatus = 'pending_review' | 'indexed';
 
 export interface HistoryItem {
   id: string;
@@ -41,6 +47,7 @@ export interface HistoryItem {
   caseId?: string;
   reportId?: string;
   evidenceIds?: string[];
+  reviewStatus?: ReportReviewStatus;
   riskLevel?: RiskLevel;
   riskScore?: number;
   confidence?: number;
@@ -50,6 +57,7 @@ export interface ReportHistoryInput {
   company: string;
   evidence: string;
   reportId: string | null;
+  reviewStatus?: ReportReviewStatus | null;
 }
 
 interface CaseState {
@@ -115,6 +123,10 @@ function cleanRiskLevel(value: unknown): RiskLevel | undefined {
   return undefined;
 }
 
+function cleanReviewStatus(value: unknown): ReportReviewStatus | undefined {
+  return value === 'pending_review' || value === 'indexed' ? value : undefined;
+}
+
 function cleanAnalyzeResponse(value: unknown): AnalyzeResponse | undefined {
   if (!isRecord(value) || !isRecord(value.report)) return undefined;
   if (!Array.isArray(value.signals) || !Array.isArray(value.matches) || !isRecord(value.trace)) {
@@ -147,6 +159,7 @@ function parseHistoryItem(value: unknown): HistoryItem | null {
     evidenceIds: Array.isArray(value.evidenceIds)
       ? value.evidenceIds.map((item) => cleanString(item, 192)).filter(Boolean).slice(0, 20)
       : undefined,
+    reviewStatus: cleanReviewStatus(value.reviewStatus),
     riskLevel: cleanRiskLevel(value.riskLevel),
     riskScore: cleanNumber(value.riskScore),
     confidence: cleanNumber(value.confidence),
@@ -361,6 +374,7 @@ export function CaseProvider({ children }: { children: ReactNode }) {
         summary: 'Report received. You can run a check on the same evidence any time.',
         createdAt: Date.now(),
         reportId,
+        reviewStatus: input.reviewStatus ?? undefined,
       })
     );
   }, []);
@@ -368,7 +382,30 @@ export function CaseProvider({ children }: { children: ReactNode }) {
   const openHistoryItem = useCallback(
     async (id: string) => {
       const item = history.find((entry) => entry.id === id);
-      if (!item || item.kind !== 'check') return false;
+      if (!item) return false;
+      if (item.kind === 'report') {
+        for (const c of aborters.current.values()) c.abort();
+        aborters.current.clear();
+        inFlightEvidence.current.clear();
+        setEntries([
+          {
+            id: item.id,
+            kind: 'report',
+            evidence: item.evidence,
+            status: 'done',
+            result: null,
+            error: null,
+            reportId: item.reportId,
+            reportCompany: item.title,
+            reviewStatus: item.reviewStatus ?? null,
+            createdAt: item.createdAt,
+          },
+        ]);
+        setResult(null);
+        setLastEvidence(item.evidence);
+        setError(null);
+        return true;
+      }
       let resultToOpen = item.result;
       if (!resultToOpen && item.caseId) {
         try {
@@ -398,6 +435,7 @@ export function CaseProvider({ children }: { children: ReactNode }) {
       const opened = resultToOpen;
       for (const c of aborters.current.values()) c.abort();
       aborters.current.clear();
+      inFlightEvidence.current.clear();
       setEntries([
         {
           id: item.id,
