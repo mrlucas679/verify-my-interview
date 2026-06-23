@@ -25,6 +25,11 @@ function Join-UrlPath {
   return "$($BaseUrl.TrimEnd('/'))/$($Path.TrimStart('/'))"
 }
 
+function Test-UsableValue {
+  param([AllowNull()][string]$Value)
+  return (-not [string]::IsNullOrWhiteSpace($Value)) -and -not $Value.Contains("<") -and -not $Value.Contains(">")
+}
+
 function Get-BrowserPath {
   param([AllowNull()][string]$RequestedPath)
   if ($RequestedPath -and (Test-Path -LiteralPath $RequestedPath)) {
@@ -184,24 +189,85 @@ function Invoke-BrowserDom {
   return Format-BrowserOutput -Result $result
 }
 
+function Invoke-WebRequestWithRetry {
+  param(
+    [string]$TargetUrl,
+    [string]$Description,
+    [int]$ExpectedStatusCode = 200,
+    [int]$Attempts = 12,
+    [int]$DelaySeconds = 10
+  )
+  $lastError = $null
+  for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+    try {
+      $response = Invoke-WebRequest -Uri $TargetUrl -UseBasicParsing
+      if ($response.StatusCode -eq $ExpectedStatusCode) {
+        return $response
+      }
+      $lastError = "$Description returned $($response.StatusCode)."
+    } catch {
+      $statusCode = $null
+      if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+        $statusCode = [int]$_.Exception.Response.StatusCode
+      }
+      $lastError = if ($statusCode) {
+        "$Description returned $statusCode."
+      } else {
+        "$Description failed: $($_.Exception.Message)"
+      }
+    }
+    if ($attempt -lt $Attempts) {
+      Write-Host "$Description not ready yet (attempt $attempt/$Attempts). Retrying in ${DelaySeconds}s..."
+      Start-Sleep -Seconds $DelaySeconds
+    }
+  }
+  throw "$Description failed after $Attempts attempt(s): $lastError"
+}
+
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
 $healthUrl = Join-UrlPath $Url "health"
-$health = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing
-if ($health.StatusCode -ne 200) {
-  throw "Health check failed: $healthUrl returned $($health.StatusCode)."
-}
+$health = Invoke-WebRequestWithRetry -TargetUrl $healthUrl -Description "Health check"
 $healthPath = Join-Path $OutputDir "live-health.json"
 $health.Content | Set-Content -LiteralPath $healthPath -Encoding UTF8
+$healthJson = $health.Content | ConvertFrom-Json
 
-$homeResponse = Invoke-WebRequest -Uri $Url -UseBasicParsing
-if ($homeResponse.StatusCode -ne 200) {
-  throw "Home page failed: $Url returned $($homeResponse.StatusCode)."
+$authConfigUrl = Join-UrlPath $Url "auth/config"
+$authConfig = Invoke-WebRequestWithRetry -TargetUrl $authConfigUrl -Description "Auth config"
+$authConfigPath = Join-Path $OutputDir "live-auth-config.json"
+$authConfig.Content | Set-Content -LiteralPath $authConfigPath -Encoding UTF8
+$authConfigJson = $authConfig.Content | ConvertFrom-Json
+$accountsEnabled = $false
+if ($healthJson.subsystems -and $null -ne $healthJson.subsystems.accounts) {
+  $accountsEnabled = [bool]$healthJson.subsystems.accounts
+}
+if ($accountsEnabled) {
+  $requiredAuthFields = @("clientId", "authority", "scope", "redirectUri")
+  if ($authConfigJson.enabled -ne $true) {
+    throw "Auth config is disabled even though /health reports accounts=true."
+  }
+  foreach ($field in $requiredAuthFields) {
+    if (-not (Test-UsableValue ([string]$authConfigJson.$field))) {
+      throw "Auth config is missing $field."
+    }
+  }
+  $expectedRedirectUri = Join-UrlPath $Url "auth/callback"
+  if ([string]$authConfigJson.redirectUri -ine $expectedRedirectUri) {
+    throw "Auth redirectUri mismatch. Expected $expectedRedirectUri but got $($authConfigJson.redirectUri)."
+  }
 }
 
+$homeResponse = Invoke-WebRequestWithRetry -TargetUrl $Url -Description "Home page"
+
 Write-Host "Health: PASS ($healthUrl)"
+if ($accountsEnabled) {
+  Write-Host "Auth:   PASS ($authConfigUrl)"
+} else {
+  Write-Host "Auth:   SKIP (accounts disabled by /health)"
+}
 Write-Host "Home:   PASS ($Url)"
 Write-Host "Saved:  $healthPath"
+Write-Host "Saved:  $authConfigPath"
 
 if ($SkipScreenshots) {
   return
@@ -220,6 +286,13 @@ if ($dom -notmatch [regex]::Escape($readyText)) {
   throw "Live UI render check failed for $Url. Expected '$readyText'. $hint"
 }
 
+$callbackUrl = Join-UrlPath $Url "auth/callback?error=auth_verifier_probe"
+$callbackDom = Invoke-BrowserDom -Executable $browser -TargetUrl $callbackUrl
+$callbackText = "Sign-in was not completed"
+if ($callbackDom -notmatch [regex]::Escape($callbackText)) {
+  throw "Live auth callback route check failed for $callbackUrl. Expected '$callbackText'."
+}
+
 $desktopPath = Join-Path $OutputDir "live-desktop-1440.png"
 $mobilePath = Join-Path $OutputDir "live-mobile-390.png"
 
@@ -227,5 +300,6 @@ Invoke-BrowserScreenshot -Executable $browser -TargetUrl $Url -Path $desktopPath
 Invoke-BrowserScreenshot -Executable $browser -TargetUrl $Url -Path $mobilePath -Width 390 -Height 844
 
 Write-Host "Render: PASS ($readyText)"
+Write-Host "Callback: PASS ($callbackText)"
 Write-Host "Desktop screenshot: $desktopPath"
 Write-Host "Mobile screenshot:  $mobilePath"

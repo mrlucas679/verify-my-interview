@@ -37,7 +37,14 @@ import {
   type UserDoc,
 } from '../data/cosmos';
 import { getUser, upsertUser } from '../data/cosmos';
-import { authEnabled } from '../auth/identity';
+import {
+  AuthError,
+  adminViaEmailAllowlist,
+  authEnabled,
+  isAdmin,
+  verifyToken,
+  type Identity,
+} from '../auth/identity';
 import { blobEnabled, deleteEvidence, getEvidence, putEvidence } from '../storage/blob';
 import { publishEvent } from '../events/serviceBus';
 import { cleanString, cleanStringArray, sanitizeHttpUrl, sniffAudioType, sniffUploadType } from '../http/guard';
@@ -73,6 +80,14 @@ export interface HealthSnapshot {
     evidence_storage: boolean;
   };
   observability: ReturnType<typeof azureMonitorStatus>;
+}
+
+export interface AuthClientConfigResponse {
+  enabled: boolean;
+  clientId?: string;
+  authority?: string;
+  scope?: string;
+  redirectUri?: string;
 }
 
 export interface LocalUploadResponse {
@@ -161,6 +176,30 @@ const SNIFFED_AUDIO_MIME: Record<string, string> = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function cleanEnv(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeAuthority(value: string): string {
+  return value
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/oauth2\/v2\.0$/i, '')
+    .replace(/\/v2\.0$/i, '');
+}
+
+function safeHttpsOrigin(value: string | undefined): string {
+  const raw = cleanEnv(value);
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return '';
+    return parsed.origin;
+  } catch {
+    return '';
+  }
 }
 
 function cleanRiskLevel(value: unknown): RiskLevel {
@@ -704,9 +743,65 @@ export function healthSnapshot(): HealthSnapshot {
   };
 }
 
+export function authClientConfigLocal(requestOrigin?: string): AuthClientConfigResponse {
+  const clientId = cleanEnv(process.env.VITE_AUTH_CLIENT_ID || process.env.AUTH_CLIENT_ID);
+  const authority = cleanEnv(process.env.VITE_AUTH_AUTHORITY || process.env.AUTH_ISSUER);
+  const scope = cleanEnv(process.env.VITE_AUTH_SCOPE);
+  const configuredRedirect = cleanEnv(process.env.VITE_AUTH_REDIRECT_URI);
+  const origin = safeHttpsOrigin(requestOrigin);
+  const redirectUri = configuredRedirect || (origin ? `${origin}/auth/callback` : '');
+
+  if (!authEnabled() || !clientId || !authority || !scope || !redirectUri) {
+    return { enabled: false };
+  }
+
+  return {
+    enabled: true,
+    clientId,
+    authority: normalizeAuthority(authority),
+    scope,
+    redirectUri,
+  };
+}
+
 // ── Accounts, case history & evidence (signed-in users only) ─────────────────
 // All env-gated: with auth/Cosmos/Blob unconfigured these throw a clean 503 or
 // no-op, so the stateless anonymous flow is unchanged.
+
+export async function verifyBearerTokenLocal(authorization: unknown): Promise<Identity> {
+  if (!authEnabled()) throw new LocalHttpError(503, 'Accounts are not enabled on this server.');
+  const header = typeof authorization === 'string' ? authorization.trim() : '';
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  if (!token) throw new LocalHttpError(401, 'Please sign in to access your account.');
+  try {
+    const identity = await verifyToken(token);
+    if (cosmosEnabled()) {
+      void upsertUser({
+        id: identity.userId,
+        email: identity.email,
+        name: identity.name,
+        provider: identity.provider,
+      }).catch(() => {});
+    }
+    return identity;
+  } catch (error) {
+    if (error instanceof AuthError) {
+      throw new LocalHttpError(401, 'Your session has expired — please sign in again.');
+    }
+    throw error;
+  }
+}
+
+export async function verifyAdminBearerTokenLocal(authorization: unknown): Promise<Identity> {
+  const identity = await verifyBearerTokenLocal(authorization);
+  if (!isAdmin(identity)) {
+    throw new LocalHttpError(403, 'Administrator access is required for this action.');
+  }
+  if (adminViaEmailAllowlist(identity)) {
+    console.warn('[Auth] admin action authorized via AUTH_ADMIN_EMAILS.');
+  }
+  return identity;
+}
 
 const SNIFFED_UPLOAD_EXT: Record<string, string> = {
   jpeg: 'jpg',

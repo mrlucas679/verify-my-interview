@@ -121,12 +121,21 @@ async function endpointHealth(baseUrl: string, timeoutMs: number): Promise<unkno
   return fetchJson(endpointUrl(baseUrl, '/health'), { method: 'GET' }, timeoutMs);
 }
 
-function foundrySatisfied(result: LocalAnalyzeResponse, requireFoundry: boolean): boolean {
-  if (!requireFoundry) return true;
-  const foundryExpectedStages = new Set(['critic', 'report']);
+const FOUNDRY_EXPECTED_STAGES = new Set(['critic', 'report']);
+
+function foundryStageProblems(result: LocalAnalyzeResponse): string[] {
   return result.trace.stages
-    .filter((stage) => foundryExpectedStages.has(stage.stage))
-    .every((stage) => stage.engine === 'foundry');
+    .filter((stage) => FOUNDRY_EXPECTED_STAGES.has(stage.stage) && stage.engine !== 'foundry')
+    .map((stage) => {
+      const reason = stage.fallback_reason ? ` (${stage.fallback_reason})` : '';
+      return `${stage.stage}=${stage.engine}${reason}`;
+    });
+}
+
+function smokeEngineLabel(result: LocalAnalyzeResponse, requireFoundry: boolean, foundryOk: boolean): string {
+  if (result.trace.engine_mode !== 'mixed') return result.trace.engine_mode;
+  if (requireFoundry && foundryOk) return 'foundry-assisted';
+  return 'hybrid';
 }
 
 function caseResult(
@@ -135,21 +144,25 @@ function caseResult(
   requireFoundry: boolean
 ): SmokeCaseResult {
   const scoreOk = smokeCase.minimumScore === undefined || result.report.risk_score >= smokeCase.minimumScore;
-  const foundryOk = foundrySatisfied(result, requireFoundry);
+  const foundryProblems = foundryStageProblems(result);
+  const foundryOk = !requireFoundry || foundryProblems.length === 0;
   const schemaOk = result.signals.length >= 0 && result.multiPass.reviews.length > 0;
   const degradedCount = result.trace.degraded_stages?.length ?? 0;
+  const degradedDetail = result.trace.degraded_stages
+    ?.map((stage) => `${stage.stage}: ${stage.reason}`)
+    .join(' | ');
   const level: SmokeLevel = scoreOk && foundryOk && schemaOk ? 'pass' : 'fail';
   const detailParts = [
     scoreOk ? 'score check passed' : `score below ${smokeCase.minimumScore}`,
-    foundryOk ? 'engine check passed' : 'Foundry was required but deterministic engine ran',
-    degradedCount === 0 ? 'no degraded stages' : `${degradedCount} degraded stage(s)`,
+    foundryOk ? 'engine check passed (Foundry reasoning active)' : `Foundry stage check failed: ${foundryProblems.join(', ')}`,
+    degradedCount === 0 ? 'no degraded stages' : `${degradedCount} degraded stage(s): ${degradedDetail}`,
   ];
   return {
     name: smokeCase.name,
     level,
     riskLevel: result.report.risk_level,
     riskScore: result.report.risk_score,
-    engineMode: result.trace.engine_mode,
+    engineMode: smokeEngineLabel(result, requireFoundry, foundryOk),
     multiPassStatus: result.multiPass.status,
     detail: detailParts.join('; '),
   };

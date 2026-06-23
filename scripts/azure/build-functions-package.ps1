@@ -140,14 +140,47 @@ try {
 
   Copy-Item -Path (Join-Path $RepoRoot "public") -Destination (Join-Path $PackageDir "public") -Recurse
 
-  Invoke-Checked {
-    Invoke-Npx esbuild ./src/backend/local/appTools.ts --bundle --platform=node --target=node20 --format=cjs --outfile="$PackageDir\bundle.cjs" --log-level=warning
-  }
+  Invoke-Checked { node (Join-Path $RepoRoot "scripts\build-functions-bundle.mjs") "$PackageDir\bundle.cjs" }
   Patch-ImportMeta (Join-Path $PackageDir "bundle.cjs")
 
   $headers = @'
+function authConnectSources() {
+  const sources = new Set(["'self'"]);
+  for (const value of [process.env.AUTH_ISSUER, process.env.VITE_AUTH_AUTHORITY]) {
+    if (!value) continue;
+    try {
+      const url = new URL(value);
+      if (url.protocol === "https:" && /^[a-z0-9.-]+$/i.test(url.hostname)) {
+        sources.add(url.origin);
+      }
+    } catch {
+      /* Invalid auth config is reported by the app health/config paths. */
+    }
+  }
+  sources.add("https://login.microsoftonline.com");
+  sources.add("https://*.ciamlogin.com");
+  sources.add("https://*.b2clogin.com");
+  return [...sources].join(" ");
+}
+
+function contentSecurityPolicy() {
+  return [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "img-src 'self' data: blob:",
+    "media-src 'self' blob:",
+    `connect-src ${authConnectSources()}`,
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self' data:",
+    "upgrade-insecure-requests"
+  ].join("; ");
+}
+
 const SECURITY_HEADERS = {
-  "content-security-policy": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; upgrade-insecure-requests",
   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
@@ -158,6 +191,7 @@ const SECURITY_HEADERS = {
 function securityHeaders(contentType, extra = {}) {
   return {
     "content-type": contentType,
+    "content-security-policy": contentSecurityPolicy(),
     ...SECURITY_HEADERS,
     ...extra
   };
@@ -198,12 +232,75 @@ module.exports = { errorStatus, json, readBody };
 '@
   Write-Text (Join-Path $PackageDir "jsonResponse.js") $jsonHelpers
 
+  $authHelpers = @'
+const { errorStatus, json } = require("./jsonResponse");
+
+function header(req, name) {
+  const headers = req.headers || {};
+  return headers[name] || headers[name.toLowerCase()] || headers[name.toUpperCase()] || "";
+}
+
+async function requireUser(context, req) {
+  const { verifyBearerTokenLocal } = require("./bundle.cjs");
+  try {
+    return await verifyBearerTokenLocal(header(req, "authorization"));
+  } catch (error) {
+    context.res = json(errorStatus(error), {
+      error: error instanceof Error ? error.message : "Please sign in to access your account."
+    });
+    return null;
+  }
+}
+
+async function requireAdmin(context, req) {
+  const { verifyAdminBearerTokenLocal } = require("./bundle.cjs");
+  try {
+    return await verifyAdminBearerTokenLocal(header(req, "authorization"));
+  } catch (error) {
+    context.res = json(errorStatus(error), {
+      error: error instanceof Error ? error.message : "Administrator access is required."
+    });
+    return null;
+  }
+}
+
+module.exports = { requireAdmin, requireUser };
+'@
+  Write-Text (Join-Path $PackageDir "auth.js") $authHelpers
+
   New-HttpFunction "health" "health" @("get") @'
 const { json } = require("../jsonResponse");
 
 module.exports = async function (context) {
   const { healthSnapshot } = require("../bundle.cjs");
   context.res = json(200, healthSnapshot());
+};
+'@
+
+  New-HttpFunction "authConfig" "auth/config" @("get") @'
+const { json } = require("../jsonResponse");
+
+function header(req, name) {
+  const headers = req.headers || {};
+  return headers[name] || headers[name.toLowerCase()] || headers[name.toUpperCase()] || "";
+}
+
+function requestOrigin(req) {
+  const host = String(header(req, "x-forwarded-host") || header(req, "host"))
+    .split(",")[0]
+    .trim();
+  if (!/^[a-z0-9.-]+(?::\d+)?$/i.test(host)) return "";
+  const rawProto = String(header(req, "x-forwarded-proto") || "https")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  const proto = rawProto === "http" ? "http" : "https";
+  return `${proto}://${host}`;
+}
+
+module.exports = async function (context, req) {
+  const { authClientConfigLocal } = require("../bundle.cjs");
+  context.res = json(200, authClientConfigLocal(requestOrigin(req)));
 };
 '@
 
@@ -315,6 +412,146 @@ module.exports = async function (context, req) {
 };
 '@
 
+  New-HttpFunction "me" "me" @("get", "delete") @'
+const { errorStatus, json } = require("../jsonResponse");
+const { requireUser } = require("../auth");
+
+module.exports = async function (context, req) {
+  const identity = await requireUser(context, req);
+  if (!identity) return;
+
+  try {
+    const { deleteAccountLocal, getProfileLocal, withLogsOnStderr } = require("../bundle.cjs");
+    if (String(req.method || "").toUpperCase() === "DELETE") {
+      context.res = json(200, await withLogsOnStderr(() => deleteAccountLocal(identity.userId)));
+      return;
+    }
+    context.res = json(200, await withLogsOnStderr(() => getProfileLocal(identity.userId)));
+  } catch (error) {
+    const status = errorStatus(error);
+    if (status >= 500) {
+      context.log.error(`Account failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    context.res = json(status, {
+      error: error instanceof Error && status < 500 ? error.message : "Failed to load account"
+    });
+  }
+};
+'@
+
+  New-HttpFunction "meConsent" "me/consent" @("put") @'
+const { errorStatus, json, readBody } = require("../jsonResponse");
+const { requireUser } = require("../auth");
+
+module.exports = async function (context, req) {
+  const identity = await requireUser(context, req);
+  if (!identity) return;
+
+  const body = readBody(req);
+  if (!body || typeof body.store_evidence !== "boolean") {
+    context.res = json(400, { error: 'Field "store_evidence" (boolean) is required.' });
+    return;
+  }
+
+  try {
+    const { setConsentLocal, withLogsOnStderr } = require("../bundle.cjs");
+    context.res = json(200, await withLogsOnStderr(() => setConsentLocal(identity.userId, body.store_evidence)));
+  } catch (error) {
+    const status = errorStatus(error);
+    context.res = json(status, {
+      error: error instanceof Error && status < 500 ? error.message : "Failed to update consent"
+    });
+  }
+};
+'@
+
+  New-HttpFunction "cases" "cases" @("get") @'
+const { errorStatus, json } = require("../jsonResponse");
+const { requireUser } = require("../auth");
+
+module.exports = async function (context, req) {
+  const identity = await requireUser(context, req);
+  if (!identity) return;
+
+  try {
+    const { listCasesLocal, withLogsOnStderr } = require("../bundle.cjs");
+    context.res = json(200, { cases: await withLogsOnStderr(() => listCasesLocal(identity.userId)) });
+  } catch (error) {
+    const status = errorStatus(error);
+    context.res = json(status, {
+      error: error instanceof Error && status < 500 ? error.message : "Failed to load cases"
+    });
+  }
+};
+'@
+
+  New-HttpFunction "caseById" "cases/{id}" @("get") @'
+const { errorStatus, json } = require("../jsonResponse");
+const { requireUser } = require("../auth");
+
+module.exports = async function (context, req) {
+  const identity = await requireUser(context, req);
+  if (!identity) return;
+
+  try {
+    const { getCaseLocal, withLogsOnStderr } = require("../bundle.cjs");
+    context.res = json(200, await withLogsOnStderr(() => getCaseLocal(identity.userId, req.params.id || "")));
+  } catch (error) {
+    const status = errorStatus(error);
+    context.res = json(status, {
+      error: error instanceof Error && status < 500 ? error.message : "Failed to load case"
+    });
+  }
+};
+'@
+
+  New-HttpFunction "pendingReports" "reports/pending" @("get") @'
+const { errorStatus, json } = require("../jsonResponse");
+const { requireAdmin } = require("../auth");
+
+module.exports = async function (context, req) {
+  const identity = await requireAdmin(context, req);
+  if (!identity) return;
+
+  try {
+    const { listPendingReportsLocal, withLogsOnStderr } = require("../bundle.cjs");
+    context.res = json(200, await withLogsOnStderr(() => listPendingReportsLocal()));
+  } catch (error) {
+    const status = errorStatus(error);
+    context.res = json(status, {
+      error: error instanceof Error && status < 500 ? error.message : "Failed to load pending reports"
+    });
+  }
+};
+'@
+
+  New-HttpFunction "moderateReport" "reports/{id}/moderate" @("post") @'
+const { errorStatus, json, readBody } = require("../jsonResponse");
+const { requireAdmin } = require("../auth");
+
+module.exports = async function (context, req) {
+  const identity = await requireAdmin(context, req);
+  if (!identity) return;
+
+  const body = readBody(req);
+  const action = body && body.action;
+  if (action !== "approve" && action !== "reject") {
+    context.res = json(400, { error: 'Field "action" must be "approve" or "reject".' });
+    return;
+  }
+
+  try {
+    const { moderateReportLocal, withLogsOnStderr } = require("../bundle.cjs");
+    context.res = json(200, await withLogsOnStderr(() => moderateReportLocal(req.params.id || "", action, identity.userId)));
+  } catch (error) {
+    const status = errorStatus(error);
+    context.res = json(status, {
+      error: error instanceof Error && status < 500 ? error.message : "Failed to moderate report"
+    });
+  }
+};
+'@
+
   New-HttpFunction "networkGraph" "network/graph" @("get") @'
 const { json } = require("../jsonResponse");
 
@@ -349,6 +586,7 @@ module.exports = async function (context) {
       "GET /shared/:id": "Load a previously shared report result",
       "POST /upload": "Extract text from a screenshot or document",
       "POST /transcribe": "Transcribe an audio recording",
+      "GET /auth/config": "Public browser auth configuration",
       "GET /health": "Subsystem status"
     }
   });
@@ -420,6 +658,63 @@ module.exports = async function (context, req) {
   } catch (error) {
     context.log.error(`Upload failed: ${error instanceof Error ? error.message : String(error)}`);
     context.res = json(500, { error: "Could not read that file." });
+  }
+};
+'@
+
+  New-HttpFunction "evidence" "evidence" @("post") @'
+const { errorStatus, json } = require("../jsonResponse");
+const { requireUser } = require("../auth");
+const { firstFile } = require("../multipart");
+
+module.exports = async function (context, req) {
+  const identity = await requireUser(context, req);
+  if (!identity) return;
+  const file = firstFile(req, "file");
+  if (!file.file) {
+    context.res = json(file.status || 400, { error: file.error || "file is required" });
+    return;
+  }
+
+  try {
+    const { storeEvidenceLocal, withLogsOnStderr } = require("../bundle.cjs");
+    context.res = json(201, await withLogsOnStderr(() => storeEvidenceLocal(identity.userId, file.file)));
+  } catch (error) {
+    const status = errorStatus(error);
+    context.res = json(status, {
+      error: error instanceof Error && status < 500 ? error.message : "Failed to store evidence"
+    });
+  }
+};
+'@
+
+  New-HttpFunction "evidenceById" "evidence/{fileId}" @("get") @'
+const { errorStatus } = require("../jsonResponse");
+const { securityHeaders } = require("../headers");
+const { requireUser } = require("../auth");
+
+module.exports = async function (context, req) {
+  const identity = await requireUser(context, req);
+  if (!identity) return;
+
+  try {
+    const { getEvidenceLocal, withLogsOnStderr } = require("../bundle.cjs");
+    const evidenceId = `${identity.userId}/${req.params.fileId || ""}`;
+    const file = await withLogsOnStderr(() => getEvidenceLocal(identity.userId, evidenceId));
+    context.res = {
+      status: 200,
+      headers: securityHeaders(file.contentType || "application/octet-stream", {
+        "content-disposition": "inline",
+        "cache-control": "no-store"
+      }),
+      body: file.buffer
+    };
+  } catch (error) {
+    const { json } = require("../jsonResponse");
+    const status = errorStatus(error);
+    context.res = json(status, {
+      error: error instanceof Error && status < 500 ? error.message : "Failed to load evidence"
+    });
   }
 };
 '@
@@ -499,7 +794,7 @@ module.exports = async function (context, req) {
   Invoke-Checked { node --check (Join-Path $PackageDir "headers.js") }
   Invoke-Checked { node --check (Join-Path $PackageDir "jsonResponse.js") }
   Invoke-Checked { node --check (Join-Path $PackageDir "multipart.js") }
-  Invoke-Checked { node -e "const b=require(process.argv[1]); if(!b.healthSnapshot||!b.analyzeEvidenceLocal||!b.saveSharedReportLocal||!b.getSharedReportLocal){process.exit(1)}" (Join-Path $PackageDir "bundle.cjs") }
+  Invoke-Checked { node -e "const b=require(process.argv[1]); if(!b.healthSnapshot||!b.authClientConfigLocal||!b.analyzeEvidenceLocal||!b.saveSharedReportLocal||!b.getSharedReportLocal){process.exit(1)}" (Join-Path $PackageDir "bundle.cjs") }
 
   if (Test-Path -LiteralPath $ZipFullPath) {
     Remove-Item -LiteralPath $ZipFullPath -Force

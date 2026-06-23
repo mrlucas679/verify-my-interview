@@ -96,15 +96,26 @@ export function AccountMenu() {
 
   if (!auth.authenticated) {
     return (
-      <button
-        type="button"
-        onClick={() => void auth.signIn()}
-        disabled={auth.loading}
-        className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs text-muted transition hover:bg-ink-850 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 sm:text-sm"
-      >
-        {auth.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" />}
-        <span>Sign in</span>
-      </button>
+      <div ref={rootRef} className="relative">
+        <button
+          type="button"
+          onClick={() => {
+            auth.clearError();
+            void auth.signIn();
+          }}
+          disabled={auth.loading || auth.redirecting}
+          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs text-muted transition hover:bg-ink-850 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 sm:text-sm"
+        >
+          {auth.loading || auth.redirecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" />}
+          <span>{auth.redirecting ? 'Opening Microsoft' : 'Sign in'}</span>
+        </button>
+
+        {auth.error && (
+          <p className="absolute right-0 top-full z-40 mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-lg border border-risk-needs/40 bg-ink-850 p-2 text-xs text-risk-needs shadow-card" role="alert">
+            {auth.error}
+          </p>
+        )}
+      </div>
     );
   }
 
@@ -118,10 +129,11 @@ export function AccountMenu() {
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
+        title={email || name}
         className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs text-muted transition hover:bg-ink-850 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:text-sm"
       >
         <UserCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
-        <span className="hidden sm:inline">{name}</span>
+        <span className="max-w-[9rem] truncate sm:max-w-[13rem]">{email || name}</span>
         <ChevronDown className="h-3 w-3" strokeWidth={1.75} />
       </button>
 

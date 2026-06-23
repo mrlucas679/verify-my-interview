@@ -236,6 +236,9 @@ function ciamConnectSources(): string[] {
       /* Invalid auth config is handled by config/security.ts. */
     }
   }
+  sources.add('https://login.microsoftonline.com');
+  sources.add('https://*.ciamlogin.com');
+  sources.add('https://*.b2clogin.com');
   return [...sources];
 }
 

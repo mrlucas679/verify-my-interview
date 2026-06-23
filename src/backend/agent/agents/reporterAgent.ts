@@ -219,8 +219,8 @@ export class ReporterAgent {
   private advisesUnsafeAction(text: string): boolean {
     const unsafe = /\b(send|pay|transfer|share|provide|upload|forward)\b[^.\n]{0,60}\b(money|crypto|gift\s*cards?|bank(?:ing)?\s*details?|identity\s*documents?|id\s*documents?|otp|one[-\s]?time\s*(?:pin|code)|account\s*codes?)\b/gi;
     for (const match of text.matchAll(unsafe)) {
-      const before = text.slice(Math.max(0, match.index - 24), match.index);
-      if (!/\b(do\s+not|don't|never|avoid|until|before|without)\b/.test(before)) return true;
+      const before = text.slice(Math.max(0, match.index - 48), match.index);
+      if (!/\b(do\s+not|don't|should\s+not|must\s+not|cannot|can't|never|avoid|until|before|without)\b/.test(before)) return true;
     }
     return false;
   }

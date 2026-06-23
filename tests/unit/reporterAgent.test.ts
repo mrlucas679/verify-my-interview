@@ -57,6 +57,25 @@ describe('ReporterAgent narrative validation', () => {
     expect(result.fallback_reason).toBeUndefined();
   });
 
+  it('keeps safe Foundry wording that says the user should not pay', async () => {
+    const runner = {
+      runTurn: jest.fn().mockResolvedValue({
+        finalText: JSON.stringify({
+          case_summary: 'This has serious warning signs because payment is requested before the interview can continue.',
+          recommended_next_steps: [
+            'You should not send money, crypto, gift cards, identity documents, or banking details.',
+            'You must not pay the recruiter before verifying the role through official company channels.',
+          ],
+        }),
+      }),
+    };
+
+    const result = await new ReporterAgent(runner as never).run(baseInput);
+
+    expect(result.engine).toBe('foundry');
+    expect(result.fallback_reason).toBeUndefined();
+  });
+
   it('falls back when Foundry output does not match the exact report schema', async () => {
     const runner = {
       runTurn: jest.fn().mockResolvedValue({

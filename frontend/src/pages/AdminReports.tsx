@@ -132,9 +132,18 @@ export function AdminReports() {
         <div>
           <ShieldCheck className="mx-auto h-8 w-8 text-muted" strokeWidth={1.75} />
           <h1 className="mt-4 font-display text-2xl font-semibold text-white">Admin review</h1>
-          <button type="button" onClick={() => void auth.signIn()} className="btn-primary mt-5">
-            Sign in
+          <button
+            type="button"
+            onClick={() => {
+              auth.clearError();
+              void auth.signIn();
+            }}
+            disabled={auth.loading || auth.redirecting}
+            className="btn-primary mt-5 disabled:opacity-60"
+          >
+            {auth.redirecting ? 'Opening Microsoft' : 'Sign in'}
           </button>
+          {auth.error && <p className="mt-3 text-xs text-risk-needs" role="alert">{auth.error}</p>}
         </div>
       </div>
     );

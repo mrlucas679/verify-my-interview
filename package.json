@@ -20,6 +20,7 @@
     "azure:monitor": "powershell -ExecutionPolicy Bypass -File scripts/azure/configure-monitoring.ps1",
     "azure:domain": "powershell -ExecutionPolicy Bypass -File scripts/azure/configure-custom-domain.ps1",
     "azure:verify-live-ui": "powershell -ExecutionPolicy Bypass -File scripts/azure/verify-live-ui.ps1",
+    "azure:verify-live-auth-flow": "node scripts/azure/verify-live-auth-flow.mjs",
     "start": "node dist/src/backend/server.js",
     "seed:network": "tsx src/backend/scripts/seedNetwork.ts",
     "cli": "tsx src/backend/cli/vmi.ts",

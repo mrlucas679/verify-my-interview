@@ -3,6 +3,7 @@ param(
   [string]$AppName = $(if ($env:AZURE_FUNCTION_APP_NAME) { $env:AZURE_FUNCTION_APP_NAME } else { "vmi-online-3907" }),
   [string]$ZipPath = "dist-functions.zip",
   [string]$AuthAppName = $(if ($env:AUTH_APP_NAME) { $env:AUTH_APP_NAME } else { "$AppName-auth" }),
+  [string]$PublicHostName = $(if ($env:VMI_PUBLIC_HOSTNAME) { $env:VMI_PUBLIC_HOSTNAME } else { "" }),
   [switch]$SkipBuild,
   [switch]$AllowMissingTelemetry
 )
@@ -158,6 +159,111 @@ function Get-AuthorityFromIssuer {
   return $Issuer.Trim().TrimEnd("/") -replace "/v2\.0$", ""
 }
 
+function Get-BoundCustomHost {
+  param(
+    [string]$ResourceGroupName,
+    [string]$WebAppName
+  )
+  $attempts = @(
+    @("webapp", "config", "hostname", "list", "--resource-group", $ResourceGroupName, "--webapp-name", $WebAppName, "-o", "json"),
+    @("webapp", "config", "hostname", "list", "--resource-group", $ResourceGroupName, "--name", $WebAppName, "-o", "json"),
+    @("functionapp", "config", "hostname", "list", "--resource-group", $ResourceGroupName, "--name", $WebAppName, "-o", "json")
+  )
+  $json = $null
+  foreach ($attemptArgs in $attempts) {
+    try {
+      $json = & az @attemptArgs 2>$null
+    } catch {
+      $json = $null
+    }
+    if ($LASTEXITCODE -eq 0 -and $json) {
+      break
+    }
+  }
+  if (-not $json) { return $null }
+  $hosts = ConvertFrom-AzJson $json
+  if (-not $hosts) {
+    return $null
+  }
+  foreach ($entry in @($hosts)) {
+    $name = [string]$entry.name
+    if (
+      (Test-UsableValue $name) -and
+      $name -notlike "*.azurewebsites.net" -and
+      $name -notlike "*.scm.azurewebsites.net"
+    ) {
+      return $name.Trim()
+    }
+  }
+  return $null
+}
+
+function Normalize-PublicHostName {
+  param([AllowNull()][string]$Value)
+  if (-not (Test-UsableValue $Value)) {
+    return $null
+  }
+  $raw = $Value.Trim().TrimEnd("/")
+  if ($raw -match "^https?://") {
+    try {
+      $uri = [System.Uri]$raw
+      $raw = $uri.Host
+    } catch {
+      return $null
+    }
+  }
+  $normalizedHostName = $raw.Split("/")[0].Trim()
+  if ($normalizedHostName -match "^[a-z0-9.-]+(?::\d+)?$") {
+    return $normalizedHostName
+  }
+  return $null
+}
+
+function Get-PreferredPublicHostName {
+  param(
+    [AllowNull()][string]$RequestedPublicHostName,
+    [string]$ResourceGroupName,
+    [string]$WebAppName
+  )
+  $requested = Normalize-PublicHostName $RequestedPublicHostName
+  if (Test-UsableValue $requested) {
+    return $requested
+  }
+  $bound = Normalize-PublicHostName (Get-BoundCustomHost -ResourceGroupName $ResourceGroupName -WebAppName $WebAppName)
+  if (Test-UsableValue $bound) {
+    return $bound
+  }
+  if ($WebAppName -eq "vmi-online-3907") {
+    return "app.verifymyinterview.co.za"
+  }
+  return $null
+}
+
+function Get-DefaultAuthRedirectUri {
+  param(
+    [string]$ResourceGroupName,
+    [string]$WebAppName,
+    [AllowNull()][string]$RequestedPublicHostName
+  )
+  $customHost = Get-PreferredPublicHostName -RequestedPublicHostName $RequestedPublicHostName -ResourceGroupName $ResourceGroupName -WebAppName $WebAppName
+  $hostName = if (Test-UsableValue $customHost) { $customHost.Trim() } else { "$WebAppName.azurewebsites.net" }
+  return "https://$hostName/auth/callback"
+}
+
+function Select-AuthRedirectUris {
+  param(
+    [AllowNull()][string]$PrimaryRedirectUri,
+    [string]$WebAppName
+  )
+  $values = New-Object System.Collections.Generic.List[string]
+  foreach ($uri in @($PrimaryRedirectUri, "https://$WebAppName.azurewebsites.net/auth/callback")) {
+    if ((Test-UsableValue $uri) -and -not $values.Contains($uri.Trim())) {
+      [void]$values.Add($uri.Trim())
+    }
+  }
+  return $values.ToArray()
+}
+
 function Get-AuthClientIdCandidate {
   $clientId = Get-FirstUsableEnvValue @("AUTH_CLIENT_ID", "VITE_AUTH_CLIENT_ID")
   if (Test-UsableValue $clientId) {
@@ -201,6 +307,21 @@ function Get-EntraAuthApp {
   return ConvertFrom-AzJson $json
 }
 
+function Get-EntraAuthAppByAppId {
+  param([string]$AppId)
+  if (-not (Test-UsableValue $AppId)) {
+    return $null
+  }
+  $json = az ad app show `
+    --id $AppId `
+    --query "{appId:appId,id:id,displayName:displayName}" `
+    -o json
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not read the Entra app registration for AUTH_CLIENT_ID=$AppId. Check that your signed-in account can read app registrations."
+  }
+  return ConvertFrom-AzJson $json
+}
+
 function New-EntraAuthApp {
   param([string]$DisplayName)
   Write-Host "Creating Entra auth app registration: $DisplayName"
@@ -231,13 +352,22 @@ function Set-EntraAuthAppManifest {
   param(
     [string]$ObjectId,
     [string]$AppId,
-    [string]$RedirectUri
+    [string[]]$RedirectUris
   )
+  $usableRedirectUris = @(
+    $RedirectUris |
+      Where-Object { Test-UsableValue $_ } |
+      ForEach-Object { $_.Trim() } |
+      Select-Object -Unique
+  )
+  if ($usableRedirectUris.Count -eq 0) {
+    throw "At least one auth redirect URI is required."
+  }
   $scopeId = Get-AccessAsUserScopeId -AppId $AppId
   $manifest = [ordered]@{
     identifierUris = @("api://$AppId")
     spa = @{
-      redirectUris = @($RedirectUri)
+      redirectUris = @($usableRedirectUris)
     }
     api = @{
       requestedAccessTokenVersion = 2
@@ -278,7 +408,7 @@ function Set-EntraAuthAppManifest {
 function Ensure-EntraAuthApp {
   param(
     [string]$DisplayName,
-    [string]$RedirectUri
+    [string[]]$RedirectUris
   )
   $app = Get-EntraAuthApp -DisplayName $DisplayName
   if (-not $app) {
@@ -289,7 +419,7 @@ function Ensure-EntraAuthApp {
   if (-not (Test-UsableValue $app.appId) -or -not (Test-UsableValue $app.id)) {
     throw "The Entra app registration did not return a usable appId/object id."
   }
-  Set-EntraAuthAppManifest -ObjectId $app.id -AppId $app.appId -RedirectUri $RedirectUri
+  Set-EntraAuthAppManifest -ObjectId $app.id -AppId $app.appId -RedirectUris $RedirectUris
   return $app.appId
 }
 
@@ -375,8 +505,10 @@ function Import-AppSettingsFromAzure {
 function Ensure-AuthDefaults {
   param(
     [string]$TenantId,
+    [string]$ResourceGroupName,
     [string]$WebAppName,
-    [string]$AuthRegistrationName
+    [string]$AuthRegistrationName,
+    [AllowNull()][string]$RequestedPublicHostName
   )
 
   $issuerValue = [Environment]::GetEnvironmentVariable("AUTH_ISSUER", "Process")
@@ -390,12 +522,29 @@ function Ensure-AuthDefaults {
   }
 
   Set-EnvIfMissing "VITE_AUTH_AUTHORITY" (Get-AuthorityFromIssuer $issuerValue) "AUTH_ISSUER"
-  Set-EnvIfMissing "VITE_AUTH_REDIRECT_URI" "https://$WebAppName.azurewebsites.net/auth/callback" "App Service URL"
+  $derivedRedirectUri = Get-DefaultAuthRedirectUri -ResourceGroupName $ResourceGroupName -WebAppName $WebAppName -RequestedPublicHostName $RequestedPublicHostName
+  $defaultRedirectUri = "https://$WebAppName.azurewebsites.net/auth/callback"
+  $currentRedirectUri = [Environment]::GetEnvironmentVariable("VITE_AUTH_REDIRECT_URI", "Process")
+  if (-not (Test-UsableValue $currentRedirectUri)) {
+    [Environment]::SetEnvironmentVariable("VITE_AUTH_REDIRECT_URI", $derivedRedirectUri, "Process")
+    Write-Host "Derived VITE_AUTH_REDIRECT_URI from bound custom domain or App Service URL."
+  } elseif (($currentRedirectUri.Trim() -ieq $defaultRedirectUri) -and ($derivedRedirectUri -ine $defaultRedirectUri)) {
+    [Environment]::SetEnvironmentVariable("VITE_AUTH_REDIRECT_URI", $derivedRedirectUri, "Process")
+    Write-Host "Updated VITE_AUTH_REDIRECT_URI to the bound custom domain."
+  }
+  Write-Host "Using auth redirect URI: $([Environment]::GetEnvironmentVariable("VITE_AUTH_REDIRECT_URI", "Process"))"
 
   $clientId = Get-AuthClientIdCandidate
+  $primaryRedirectUri = Get-FirstUsableEnvValue @("VITE_AUTH_REDIRECT_URI")
+  $redirectUris = Select-AuthRedirectUris -PrimaryRedirectUri $primaryRedirectUri -WebAppName $WebAppName
   if (-not (Test-UsableValue $clientId)) {
-    $redirectUri = Get-FirstUsableEnvValue @("VITE_AUTH_REDIRECT_URI")
-    $clientId = Ensure-EntraAuthApp -DisplayName $AuthRegistrationName -RedirectUri $redirectUri
+    $clientId = Ensure-EntraAuthApp -DisplayName $AuthRegistrationName -RedirectUris $redirectUris
+  } else {
+    $app = Get-EntraAuthAppByAppId -AppId $clientId
+    if (-not $app -or -not (Test-UsableValue $app.id)) {
+      throw "The existing auth app registration did not return a usable object id."
+    }
+    Set-EntraAuthAppManifest -ObjectId $app.id -AppId $clientId -RedirectUris $redirectUris
   }
   if (Test-UsableValue $clientId) {
     Set-EnvIfMissing "AUTH_CLIENT_ID" $clientId "existing auth configuration"
@@ -409,7 +558,7 @@ Import-DotEnv (Join-Path $RepoRoot ".env")
 
 $account = Get-AzAccount
 Import-AppSettingsFromAzure -ResourceGroupName $ResourceGroup -WebAppName $AppName
-Ensure-AuthDefaults -TenantId $account.tenantId -WebAppName $AppName -AuthRegistrationName $AuthAppName
+Ensure-AuthDefaults -TenantId $account.tenantId -ResourceGroupName $ResourceGroup -WebAppName $AppName -AuthRegistrationName $AuthAppName -RequestedPublicHostName $PublicHostName
 Ensure-BetaLaunchDefaults
 
 Require-EnvGroup @(

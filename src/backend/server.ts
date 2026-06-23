@@ -22,6 +22,7 @@ import {
   LocalHttpError,
   MAX_LOCAL_EVIDENCE_CHARS,
   analyzeEvidenceLocal,
+  authClientConfigLocal,
   chatLocal,
   deleteAccountLocal,
   deleteReportLocal,
@@ -121,6 +122,16 @@ function analyzeTimeoutMs(): number {
   const configured = Number(process.env.VMI_ANALYZE_TIMEOUT_MS);
   if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_ANALYZE_TIMEOUT_MS;
   return Math.max(5_000, Math.min(120_000, Math.floor(configured)));
+}
+
+function browserRequestOrigin(req: Request): string | undefined {
+  const forwardedHost = req.get('x-forwarded-host')?.split(',')[0]?.trim();
+  const host = forwardedHost || req.get('host')?.trim();
+  if (!host || !/^[a-z0-9.-]+(?::\d+)?$/i.test(host)) return undefined;
+
+  const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+  const proto = forwardedProto === 'http' || forwardedProto === 'https' ? forwardedProto : req.protocol;
+  return `${proto === 'http' ? 'http' : 'https'}://${host}`;
 }
 
 function abortReason(signal: AbortSignal, fallback: string): Error {
@@ -604,6 +615,15 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 /**
+ * GET /auth/config
+ * Public browser auth metadata. This keeps static SPA builds portable across the
+ * Azure default hostname and the custom domain without exposing secrets.
+ */
+app.get('/auth/config', (req: Request, res: Response) => {
+  res.json(authClientConfigLocal(browserRequestOrigin(req)));
+});
+
+/**
  * GET /docs
  * API documentation
  */
@@ -629,6 +649,7 @@ app.get('/docs', (_req: Request, res: Response) => {
       'GET /cases/:id': 'A single case snapshot',
       'POST /evidence': 'Store a consented evidence file (returns evidenceId)',
       'GET /evidence/:fileId': 'Download own stored evidence (API-proxied)',
+      'GET /auth/config': 'Public browser auth configuration',
       'GET /health': 'Health check with subsystem status',
       'GET /docs': 'API documentation',
     },

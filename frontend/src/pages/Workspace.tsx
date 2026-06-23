@@ -224,11 +224,15 @@ function InvestigationErrorCard({
   entry,
   authEnabled,
   authLoading,
+  authRedirecting,
+  authError,
   onSignIn,
 }: {
   entry: CaseEntry;
   authEnabled: boolean;
   authLoading: boolean;
+  authRedirecting: boolean;
+  authError?: string | null;
   onSignIn: () => Promise<void>;
 }) {
   const canSignIn = authEnabled && (entry.errorCode === 'trial_exhausted' || entry.errorCode === 'auth_required');
@@ -242,13 +246,14 @@ function InvestigationErrorCard({
           <button
             type="button"
             onClick={() => void onSignIn()}
-            disabled={authLoading}
+            disabled={authLoading || authRedirecting}
             className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-line bg-ink-800 px-3 py-2 text-xs text-slate-100 transition hover:border-accent/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
           >
-            {authLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" strokeWidth={1.75} />}
-            Sign in
+            {authLoading || authRedirecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" strokeWidth={1.75} />}
+            {authRedirecting ? 'Opening Microsoft' : 'Sign in'}
           </button>
         )}
+        {authError && <p className="mt-2 text-xs text-risk-needs">{authError}</p>}
       </div>
     </div>
   );
@@ -809,7 +814,12 @@ export function Workspace() {
                         entry={item.entry}
                         authEnabled={auth.enabled}
                         authLoading={auth.loading}
-                        onSignIn={auth.signIn}
+                        authRedirecting={auth.redirecting}
+                        authError={auth.error}
+                        onSignIn={() => {
+                          auth.clearError();
+                          return auth.signIn();
+                        }}
                       />
                     ) : item.entry.result ? (
                       <ResultGroup result={item.entry.result} isLatest={item.entry.id === latestDoneId} />
